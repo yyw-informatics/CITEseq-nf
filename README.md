@@ -18,43 +18,37 @@ consume.
 
 ## Pipeline DAG
 
-For each library (fan-out) up through gating, then aggregated for embedding:
+Per-library fan-out through gating, then aggregated for embedding. Phase A
+(QC + normalization + gating) runs once per library; Phase B (totalVI +
+scVI + embedding comparison) runs once on the cohort.
 
-```
-CellRanger
-    │
-    ├─ 00b  SoupX         (ambient-RNA correction, R)
-    └─ 00c  DecontX       (ambient-RNA correction, R)         ← default branch
-    │
-    ▼
-    01    QC + Scrublet       (per-cell QC metrics + doublet scores)
-    01b   scDblFinder         (doublet calls, R)
-    │
-    ▼
-    select_branch            (promote decontx|soupx to canonical names)
-    │
-    ├─ 02  DSB ADT norm       (R)  — intermediate QC, not used downstream in default
-    ├─ 03  CLR ADT norm       (Python) ─────────────┐
-    └─ 04  RNA norm + HVG     (Python) ─┐           │
-                                         │           │
-                                         ▼           │
-    05a   ThresholdR          (R, per-marker FG/BG thresholds)
-    │                                    │           │
-    ├─ 05b  KDE validation    (Python) ─ merges with CLR
-    └─ 05c  Fitness metrics   (Python)
-                                         │           │
-    ──────────────── Phase B ──────────────           │
-                                         │           │
-                                         ▼           ▼
-    06    totalVI             (Python, GPU) — joint RNA+ADT integration
-    07    scVI                (Python, GPU) — RNA-only integration
-    │
-    ▼
-    08    Embedding comparison (Python) — pick primary embedding, compute
-                                          neighbors + UMAP
-    │
-    ▼
-    adata_qc_embedded.h5ad + embedding_comparison.csv   ← handoff point
+```mermaid
+flowchart TD
+    CR[CellRanger outs] --> SoupX[00b SoupX<br/>ambient-RNA, R]
+    CR --> DecontX[00c DecontX<br/>ambient-RNA, R · default]
+    SoupX --> QC
+    DecontX --> QC[01 QC + Scrublet<br/>per-cell metrics + doublets]
+    QC --> SCDB[01b scDblFinder<br/>doublet calls, R]
+    SCDB --> SEL[select_branch<br/>promote to canonical names]
+    SEL --> DSB[02 DSB ADT norm<br/>R · diagnostic only]
+    SEL --> CLR[03 CLR ADT norm<br/>Python]
+    SEL --> RNA[04 RNA norm + HVG<br/>Python]
+    CLR --> THR[05a ThresholdR<br/>per-marker FG/BG, R]
+    THR --> KDE[05b KDE validation<br/>Python]
+    THR --> FIT[05c Fitness metrics<br/>Python]
+    CLR --> TVI[06 totalVI<br/>RNA+ADT, GPU]
+    RNA --> TVI
+    RNA --> SVI[07 scVI<br/>RNA-only, GPU]
+    TVI --> EMB[08 Embedding comparison<br/>pick primary, neighbors, UMAP]
+    SVI --> EMB
+    EMB --> OUT[adata_qc_embedded.h5ad<br/>+ embedding_comparison.csv]
+
+    classDef phaseA fill:#e8f4f8,stroke:#2b8cbe
+    classDef phaseB fill:#fde0c5,stroke:#e66101
+    classDef out fill:#d8f0d8,stroke:#2ca02c
+    class SoupX,DecontX,QC,SCDB,SEL,DSB,CLR,RNA,THR,KDE,FIT phaseA
+    class TVI,SVI,EMB phaseB
+    class OUT out
 ```
 
 ## Handoff contract
@@ -73,15 +67,10 @@ valid consumer — no code-level imports required.
 
 ## Downstream — bring your own
 
-citeseq-nf ends at step 08. Everything study-specific — ADT gating against a
-particular antibody panel, cell-type classification, hypothesis testing,
-manuscript figures — lives in the calling study repository. Those stages
-tend to be tightly coupled to a study's biology (panel design, experimental
-factors) and rerun rarely; Nextflow overhead is not worth the conversion
-cost.
-
-The calling repo typically reads `adata_qc_embedded.h5ad` from its own
-`data/processed/` directory and proceeds with plain Python/R invocations.
+citeseq-nf ends at step 08. Cell-type classification, hypothesis testing,
+panel-specific gating, and manuscript figures live in the calling study
+repo, which reads `adata_qc_embedded.h5ad` from `{outdir}/data/processed/`
+and proceeds with plain Python/R invocations.
 
 ## Prerequisites
 
@@ -163,47 +152,20 @@ ${CITESEQ_NF}/run.sh run \
 
 ## Inputs
 
-The pipeline reads CellRanger output plus two optional study-specific files.
+| Input | Required? | Default location | Notes |
+|---|---|---|---|
+| CellRanger `outs/` | yes | `{project_root}/10X_cloud/outs/<library_id>/` | Override with `--data_root`. Each `<library_id>` is a standard CellRanger output dir. |
+| `sample_metadata.json` | optional | passed via `--sample_metadata_json` | JSON dict: `library_id` → `{donor, age, age_group, timepoint, replicate}`. Unknown keys ignored. |
+| `forced_hvgs.txt` | optional | passed via `--forced_hvgs_file` | One gene symbol per line; `#` comments and blanks ignored. Genes are pinned into the HVG set regardless of Seurat-v3 ranking. |
 
-### CellRanger outputs
-
-Default location: `{project_root}/10X_cloud/outs/<library_id>/` (override
-via `--data_root`). Each `<library_id>` subdirectory should contain the
-standard CellRanger output (`raw_feature_bc_matrix/`,
-`filtered_feature_bc_matrix/`, etc.).
-
-### `sample_metadata.json` (optional)
-
-A JSON dict mapping `library_id` (the per-library CellRanger `outs/`
-subdirectory name) to an object with optional keys: `donor`, `age`,
-`age_group`, `timepoint`, `replicate`. Unknown keys are ignored; missing
-keys are treated as not-annotated.
+<details><summary>Example sample_metadata.json + forced_hvgs.txt</summary>
 
 ```json
 {
-  "Lib01": {
-    "donor": "Donor_A",
-    "age": 25,
-    "age_group": "young",
-    "timepoint": "d0",
-    "replicate": 1
-  },
-  "Lib02": {
-    "donor": "Donor_B",
-    "age": 68,
-    "age_group": "aged",
-    "timepoint": "d7",
-    "replicate": 1
-  }
+  "Lib01": {"donor": "Donor_A", "age": 25, "age_group": "young", "timepoint": "d0", "replicate": 1},
+  "Lib02": {"donor": "Donor_B", "age": 68, "age_group": "aged",  "timepoint": "d7", "replicate": 1}
 }
 ```
-
-### `forced_hvgs.txt` (optional)
-
-One gene symbol per line. Blank lines and lines starting with `#` are
-ignored. Listed genes are always retained in the HVG set regardless of
-Seurat-v3 ranking — use sparingly, for panel-relevant genes you want to
-guarantee in the integration.
 
 ```
 # Cytotoxicity markers
@@ -216,8 +178,7 @@ GATA3
 TBX21
 ```
 
-An empty file (or no file) means no forced HVGs; the pipeline relies on
-Seurat-v3 auto-selection only.
+</details>
 
 ## Entry points
 
@@ -252,19 +213,14 @@ defaults stay active when callers omit a param.
 
 ### Required
 
-| Param | Meaning |
-|---|---|
-| `--project_root` | Absolute path to the calling study's root. Used to locate input data (via `--data_root` default) and to anchor default output locations. |
-| `--outdir` | Where to write all pipeline outputs. Usually equal to `--project_root`. |
-| `--conda_env` | Absolute path to the CITE-seq conda/mamba environment. `--python` and `--rscript` default to `${conda_env}/bin/python` and `${conda_env}/bin/Rscript`. |
-| `--panel` | Path to an ADT panel YAML defining your antibody panel. See `panels/example_panel.yaml` for the schema. |
-
-### Required when running GPU steps under `-profile sge`
-
-| Param | Meaning |
-|---|---|
-| `--sge_gpu_totalvi_queue` | SGE queue spec for the totalVI GPU step, e.g. `gpu.q@<host>`. |
-| `--sge_gpu_scvi_queue` | SGE queue spec for the scVI GPU step, e.g. `gpu.q@<host>`. |
+| Param | When required | Meaning |
+|---|---|---|
+| `--project_root` | always | Absolute path to the calling study's root. Anchors input lookup (via `--data_root` default) and output locations. |
+| `--outdir` | always | Where to write all pipeline outputs. Usually equal to `--project_root`. |
+| `--conda_env` | always | Absolute path to the CITE-seq conda/mamba environment. `--python` and `--rscript` default to `${conda_env}/bin/python` and `${conda_env}/bin/Rscript`. |
+| `--panel` | always | Path to an ADT panel YAML. See `panels/example_panel.yaml` for the schema. |
+| `--sge_gpu_totalvi_queue` | GPU steps under `-profile sge` | SGE queue spec for the totalVI GPU step, e.g. `gpu.q@<host>`. |
+| `--sge_gpu_scvi_queue` | GPU steps under `-profile sge` | SGE queue spec for the scVI GPU step, e.g. `gpu.q@<host>`. |
 
 ### Optional overrides
 
@@ -354,16 +310,14 @@ Assigned to a process via `label 'cpu_small'` etc. Defined in
 
 ## Antibody panel configuration
 
-Pass your panel as a YAML file via `--panel /path/to/your_panel.yaml`. The
-YAML is loaded and schema-validated by `scripts/config.py` at import time;
-it drives the CellRanger feature-name → canonical-name remap, the
-functional / ThresholdR / KDE marker subsets, the BIC reference markers,
-and the RNA-concordance map.
+Copy `panels/example_panel.yaml`, replace the placeholder marker names
+(`MARKER_A`, `MARKER_B`, …) and gene lists with your panel, and pass it
+with `--panel /path/to/your_panel.yaml`. The YAML is schema-validated by
+`scripts/config.py` at import time and drives the CellRanger →
+canonical-name remap, the functional / ThresholdR / KDE subsets, the BIC
+reference markers, and the RNA-concordance map.
 
-Copy `panels/example_panel.yaml` and replace the placeholder marker names
-(`MARKER_A`, `MARKER_B`, …) and gene lists with your panel.
-
-**Schema:**
+<details><summary>Schema reference (8 keys, 5 required / 3 optional)</summary>
 
 | Key | Required? | Meaning |
 |---|---|---|
@@ -376,11 +330,14 @@ Copy `panels/example_panel.yaml` and replace the placeholder marker names
 | `kde_validate` | no | Markers included in the KDE gating diagnostic. |
 | `rna_concordance` | no | Per-marker RNA validators (`positive` / `negative` gene lists + `description`). Keys must be in `functional`. |
 
-The loader enforces: every marker in `functional` / `thresholdr` /
-`thresholdr_reference` / `fgprob_override` / `kde_validate` must appear as
-a value in `rename_map`; every key of `rename_map` must appear in
-`cellranger_names`; `thresholdr_reference` must be a non-empty subset of
-`thresholdr`; `rna_concordance` keys must be a subset of `functional`.
+**Validation rules** enforced at load: every marker in `functional` /
+`thresholdr` / `thresholdr_reference` / `fgprob_override` / `kde_validate`
+must appear as a value in `rename_map`; every key of `rename_map` must
+appear in `cellranger_names`; `thresholdr_reference` must be a non-empty
+subset of `thresholdr`; `rna_concordance` keys must be a subset of
+`functional`.
+
+</details>
 
 ## Troubleshooting
 
@@ -404,7 +361,7 @@ a value in `rename_map`; every key of `rename_map` must appear in
 
 ## Development
 
-### Design rules
+<details><summary>Design rules</summary>
 
 1. **Params are override-only.** Defaults for scientific values live in
    `config.py` / `config.R`, not in `nextflow.config`. (Infrastructure paths
@@ -422,7 +379,9 @@ a value in `rename_map`; every key of `rename_map` must appear in
    embedding comparison): cell counts ±0.5%, ELBO / silhouette ±2%, obsm
    key parity — not exact diff.
 
-### How to add a new generic step
+</details>
+
+<details><summary>How to add a new generic step</summary>
 
 1. Create the script under `scripts/python/` or `scripts/R/`.
 2. Create the module in `modules/stepNN_name.nf`:
@@ -437,7 +396,7 @@ a value in `rename_map`; every key of `rename_map` must appear in
 4. Add a contract header (template below).
 5. Add a resource label in `conf/resources.config` if a new tier is needed.
 
-### Contract header template
+**Contract header template** (top-of-module comment):
 
 ```groovy
 /*
@@ -452,7 +411,9 @@ a value in `rename_map`; every key of `rename_map` must appear in
  */
 ```
 
-### Repository layout
+</details>
+
+<details><summary>Repository layout</summary>
 
 ```
 citeseq-nf/
@@ -481,7 +442,7 @@ citeseq-nf/
 │   ├── phase_a_qc.nf        # decontam → QC → normalization → gating
 │   └── phase_b_embed.nf     # totalVI + scVI + embedding comparison
 ├── scripts/
-│   ├── config.py            # Generic + panel-specific config (Python)
+│   ├── config.py            # Generic config (Python) + panel-YAML loader
 │   ├── config.R             # R mirror
 │   ├── python/              # 9 analytical step scripts (Python)
 │   ├── R/                   # 4 analytical step scripts (R)
@@ -493,8 +454,9 @@ citeseq-nf/
 
 `conf/` holds cluster and resource configs. `modules/` and `subworkflows/`
 together define the Nextflow DAG; module scripts invoke code from
-`scripts/`. `panels/` provides a panel YAML template (see Antibody panel
-configuration).
+`scripts/`.
+
+</details>
 
 ## License
 
