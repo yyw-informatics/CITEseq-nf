@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────
+# Example/template panel for citeseq-nf.
+#
+# Copy this file, rename markers to match your antibody panel, and pass
+# the result to Nextflow with --panel /path/to/your_panel.yaml.
+#
+# config.py loads and schema-validates the YAML at import time when
+# SAGE_PANEL_YAML is set (Nextflow exports this automatically from
+# --panel). All ADT_* constants in scripts/config.py are derived from
+# this file.
+# ─────────────────────────────────────────────────────────────────────
+
+name: example_panel
+description: "Example panel — replace with your own panel definition."
+
+# ── Required ──────────────────────────────────────────────────────────
+
+# CellRanger feature names (as they appear in feature_bc_matrix.h5).
+cellranger_names:
+  - MARKER_A_TotalSeqB
+  - MARKER_B_TotalSeqB
+  - MARKER_C_TotalSeqB
+
+# CellRanger name → canonical short name used downstream.
+rename_map:
+  MARKER_A_TotalSeqB: MARKER_A
+  MARKER_B_TotalSeqB: MARKER_B
+  MARKER_C_TotalSeqB: MARKER_C
+
+# Markers that passed reagent QC and are used in downstream analysis.
+functional:
+  - MARKER_A
+  - MARKER_B
+  - MARKER_C
+
+# Markers entering ThresholdR GMM gating.
+thresholdr:
+  - MARKER_A
+  - MARKER_B
+  - MARKER_C
+
+# Reference markers for ThresholdR BIC model selection. Pick markers
+# known to be cleanly bimodal in your data — they drive the adaptive
+# BIC threshold for all other markers.
+thresholdr_reference:
+  - MARKER_A
+  - MARKER_B
+
+# ── Optional ──────────────────────────────────────────────────────────
+
+# Markers forced to use totalVI fg_prob instead of ThresholdR — useful
+# when ThresholdR captures noise rather than the true positive
+# population (e.g., for very rare populations).
+fgprob_override:
+  - MARKER_C
+
+# Markers to include in the KDE gating diagnostic.
+kde_validate:
+  - MARKER_A
+  - MARKER_B
+  - MARKER_C
+
+# Per-marker RNA validators. Used by the fitness check to cross-
+# reference that each ADT gate aligns with the expected RNA program.
+# Keys must be in `functional`; values are gene symbols.
+rna_concordance:
+  MARKER_A:
+    positive: [GENE_X, GENE_Y]
+    description: "<cell-type identity defined by MARKER_A>"
+  MARKER_B:
+    positive: [GENE_Z]
+    negative: [GENE_W]
+    description: "<cell-type identity defined by MARKER_B>"
+
+# ── Validation rules (enforced by the loader) ─────────────────────────
+#
+# Every marker in functional / thresholdr / thresholdr_reference /
+# fgprob_override / kde_validate MUST appear as a value in rename_map.
+# Every key of rename_map MUST appear in cellranger_names.
+# thresholdr_reference MUST be a non-empty subset of thresholdr.
+# rna_concordance keys (if present) MUST be a subset of functional.
