@@ -1,0 +1,5 @@
+marker,k_selected,bic_margin,overlap_coeff,stain_quality_score,min_component_frac,thr_valley_dist,rna_concordance_ratio,fitness_verdict
+CD7,2,0.1894,0.0072,3.7314,0.3425,0.3888,10.327,PASS
+CD117,2,-0.0029,0.1936,1.7081,0.2638,0.5127,30.2336,FAIL
+CRTH2,2,0.0545,0.0905,2.8601,0.3485,0.4365,0.2164,FAIL
+CD16,2,-0.0007,0.2954,1.0331,0.4761,0.9086,6.2148,FAIL

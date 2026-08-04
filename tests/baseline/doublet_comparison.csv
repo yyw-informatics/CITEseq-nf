@@ -1,0 +1,17 @@
+sample,n_cells,scrublet_doublets,scrublet_pct,scDblFinder_doublets,scDblFinder_pct
+donor_04_young_d0_sample_1,6258,0,0.0,486,7.77
+donor_04_young_d7_sample_2,18033,0,0.0,1503,8.33
+donor_02_aged_d0_sample_3,13817,0,0.0,651,4.71
+donor_02_aged_d7_sample_4,17166,0,0.0,1590,9.26
+donor_05_young_d0_sample_5,13640,0,0.0,530,3.89
+donor_05_young_d7_sample_6,13876,0,0.0,591,4.26
+donor_03_aged_d0_sample_7,6806,0,0.0,395,5.8
+donor_03_aged_d7_sample_8,8554,0,0.0,342,4.0
+donor_06_young_d0_rep1_sample_9_1,9052,0,0.0,328,3.62
+donor_06_young_d0_rep2_sample_9_2,6980,0,0.0,322,4.61
+donor_06_young_d7_rep1_sample_10_1,6902,0,0.0,162,2.35
+donor_06_young_d7_rep2_sample_10_2,7050,0,0.0,252,3.57
+donor_01_aged_d0_rep1_sample_11_1,16674,0,0.0,1151,6.9
+donor_01_aged_d0_rep2_sample_11_2,12022,0,0.0,511,4.25
+donor_01_aged_d7_rep1_sample_12_1,10820,0,0.0,407,3.76
+donor_01_aged_d7_rep2_sample_12_2,8875,0,0.0,226,2.55
