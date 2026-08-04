@@ -6,7 +6,8 @@ report.html
 trace.txt
 dag.html
 
-logs/
+logs/*
+!logs/.gitkeep
 
 __pycache__/
 *.py[cod]
@@ -16,5 +17,3 @@ __pycache__/
 .Rdata
 .RData
 .Ruserdata
-
-tests/
