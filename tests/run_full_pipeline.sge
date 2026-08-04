@@ -1,0 +1,275 @@
+#!/bin/bash
+#$ -N citeseq_full_pipeline
+#$ -cwd
+#$ -j y
+#$ -o logs/full_pipeline_$JOB_ID.log
+# Resource requests are a starting point only. A new owner on a different
+# cluster may need to change the runtime, slots and memory below.
+#$ -l h_rt=12:00:00
+#$ -pe smp 4
+#$ -l h_vmem=16G
+
+# Driver for the citeseq-nf default workflow: Phase A QC then Phase B embedding.
+#
+# The pipeline sends the two GPU steps (step06 totalVI, step07 scVI) to the
+# queues you give in GPU_QUEUE_TOTALVI and GPU_QUEUE_SCVI. You do not pick a
+# node by hand.
+#
+# With -resume, Nextflow reuses cached results for any step whose inputs and
+# code did not change, so a rerun only redoes the changed steps.
+#
+# Outputs land under $PROJECT:
+#   data/processed/adata_totalvi.h5ad
+#   data/processed/adata_scvi.h5ad
+#   data/processed/adata_qc_embedded.h5ad
+#   models/totalvi_model/, models/scvi_model/
+#   results/phase2_embedding/
+#   figures/
+# Files with the same names are overwritten. Save a copy first if you need them.
+#
+# Usage (submit from the repo root, so "logs/" in the -o line above exists):
+#   mkdir -p logs
+#   export PROJECT=/path/to/study
+#   export CONDA_ENV=/path/to/envs/cite_seq
+#   export PANEL=panels/example_panel.yaml
+#   export GPU_QUEUE_TOTALVI=gpu.q@your-gpu-host
+#   export GPU_QUEUE_SCVI=gpu.q@your-gpu-host
+#   qsub -V tests/run_full_pipeline.sge
+#
+# "qsub -V" passes your exported variables to the job. If your site blocks -V,
+# pass them one by one instead:  qsub -v PROJECT=...,CONDA_ENV=... tests/...
+#
+# Required variables:
+#   PROJECT             study root holding data/, results/, models/, figures/
+#   CONDA_ENV           conda env built from env/environment.yml
+#   PANEL               ADT panel YAML (see panels/example_panel.yaml)
+#   DATA_ROOT           CellRanger input root, one subdirectory per library
+#   GPU_QUEUE_TOTALVI   SGE queue for step06 totalVI
+#   GPU_QUEUE_SCVI      SGE queue for step07 scVI
+#
+# Optional variables:
+#   SAMPLE_METADATA_JSON   JSON file mapping library id to sample metadata
+#   FORCED_HVGS_FILE       text file, one gene per line, always kept as an HVG
+#   BIO_SEP_MARKER         marker used to score biological separation
+#   N_LIBRARIES            number of libraries, if not derived from metadata
+#   NEXTFLOW_MODULE        default nextflow/25.10.4
+#   SCRATCH                temp directory, default ${TMPDIR:-/tmp}
+#   CITESEQ_NF             repo path, only needed if this script cannot find it
+
+set -euo pipefail
+
+# ---- Find the repo ---------------------------------------------------------
+# This script lives in <repo>/tests/, so the repo is one level up. Under SGE
+# the submitted script is copied to a spool directory, so $0 does not point
+# into the repo. Try, in order: the path derived from $0, a caller-set
+# CITESEQ_NF, then the submit directory (#$ -cwd starts the job there) and
+# its parent, which covers submitting from the repo root or from tests/.
+DERIVED_ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+SUBMIT_DIR="${SGE_O_WORKDIR:-$PWD}"
+if [ -n "${DERIVED_ROOT}" ] && [ -f "${DERIVED_ROOT}/main.nf" ]; then
+    CITESEQ_NF="${DERIVED_ROOT}"
+elif [ -n "${CITESEQ_NF:-}" ] && [ -f "${CITESEQ_NF}/main.nf" ]; then
+    :
+elif [ -f "${SUBMIT_DIR}/main.nf" ]; then
+    CITESEQ_NF="$(cd "${SUBMIT_DIR}" && pwd)"
+elif [ -f "${SUBMIT_DIR}/../main.nf" ]; then
+    CITESEQ_NF="$(cd "${SUBMIT_DIR}/.." && pwd)"
+else
+    echo "ERROR: cannot locate the citeseq-nf repo (no main.nf found)." >&2
+    echo "  derived from \$0: ${DERIVED_ROOT:-<none>}" >&2
+    echo "  CITESEQ_NF:       ${CITESEQ_NF:-<unset>}" >&2
+    echo "  submit dir:       ${SUBMIT_DIR}" >&2
+    echo "  Fix: resubmit with  qsub -v CITESEQ_NF=/path/to/citeseq-nf ..." >&2
+    exit 1
+fi
+
+# ---- Required settings -----------------------------------------------------
+: "${PROJECT:?set PROJECT to the study root that holds data/, results/, models/ and figures/}"
+: "${CONDA_ENV:?set CONDA_ENV to the conda env built from env/environment.yml}"
+: "${PANEL:?set PANEL to your ADT panel YAML, for example panels/example_panel.yaml}"
+: "${DATA_ROOT:?set DATA_ROOT to the CellRanger input root, one subdirectory per library}"
+: "${GPU_QUEUE_TOTALVI:?set GPU_QUEUE_TOTALVI to the SGE GPU queue for step06 totalVI, for example gpu.q@your-gpu-host}"
+: "${GPU_QUEUE_SCVI:?set GPU_QUEUE_SCVI to the SGE GPU queue for step07 scVI, for example gpu.q@your-gpu-host}"
+
+# ---- Optional settings, with safe defaults ---------------------------------
+SAMPLE_METADATA_JSON="${SAMPLE_METADATA_JSON:-}"
+FORCED_HVGS_FILE="${FORCED_HVGS_FILE:-}"
+BIO_SEP_MARKER="${BIO_SEP_MARKER:-}"
+N_LIBRARIES="${N_LIBRARIES:-}"
+NEXTFLOW_MODULE="${NEXTFLOW_MODULE:-nextflow/25.10.4}"
+SCRATCH="${SCRATCH:-${TMPDIR:-/tmp}}"
+
+# ---- Check the paths, and make them absolute -------------------------------
+# Each pipeline step runs in its own Nextflow work directory, so every path we
+# hand over must be absolute. We resolve them here instead of asking the caller.
+abspath() {
+    if [ -d "$1" ]; then
+        (cd "$1" && pwd)
+    else
+        printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"
+    fi
+}
+
+require_dir() {
+    if [ ! -d "$2" ]; then
+        echo "ERROR: $1 is not a directory: $2" >&2
+        exit 1
+    fi
+}
+
+require_file() {
+    if [ ! -f "$2" ]; then
+        echo "ERROR: $1 is not a file: $2" >&2
+        exit 1
+    fi
+}
+
+require_dir  PROJECT    "${PROJECT}"
+require_dir  CONDA_ENV  "${CONDA_ENV}"
+require_file PANEL      "${PANEL}"
+require_dir  SCRATCH    "${SCRATCH}"
+if [ ! -x "${CONDA_ENV}/bin/python" ]; then
+    echo "ERROR: no python in CONDA_ENV: ${CONDA_ENV}/bin/python" >&2
+    echo "  Build the env from env/environment.yml first." >&2
+    exit 1
+fi
+
+PROJECT="$(abspath "${PROJECT}")"
+CONDA_ENV="$(abspath "${CONDA_ENV}")"
+PANEL="$(abspath "${PANEL}")"
+SCRATCH="$(abspath "${SCRATCH}")"
+
+require_dir DATA_ROOT "${DATA_ROOT}"
+DATA_ROOT="$(abspath "${DATA_ROOT}")"
+
+if [ -n "${SAMPLE_METADATA_JSON}" ]; then
+    require_file SAMPLE_METADATA_JSON "${SAMPLE_METADATA_JSON}"
+    SAMPLE_METADATA_JSON="$(abspath "${SAMPLE_METADATA_JSON}")"
+fi
+if [ -n "${FORCED_HVGS_FILE}" ]; then
+    require_file FORCED_HVGS_FILE "${FORCED_HVGS_FILE}"
+    FORCED_HVGS_FILE="$(abspath "${FORCED_HVGS_FILE}")"
+fi
+
+export TMPDIR="${SCRATCH}"
+export NXF_TEMP="${SCRATCH}"
+
+# Run from the repo so the Nextflow work directory and the -resume cache stay
+# in one place between runs.
+cd "${CITESEQ_NF}"
+
+# ---- Make nextflow available -----------------------------------------------
+# If nextflow is already on PATH, use it. Otherwise try the module system.
+if ! command -v nextflow >/dev/null 2>&1; then
+    for init in /etc/profile.d/modules.sh "${MODULESHOME:-/usr/share/Modules}/init/bash"; do
+        if [ -r "${init}" ]; then
+            set +u
+            # shellcheck disable=SC1090
+            . "${init}" || true
+            set -u
+            break
+        fi
+    done
+    if command -v module >/dev/null 2>&1; then
+        set +u
+        module load "${NEXTFLOW_MODULE}" || true
+        set -u
+    fi
+fi
+if ! command -v nextflow >/dev/null 2>&1; then
+    echo "ERROR: nextflow not found." >&2
+    echo "  Put nextflow on PATH, or set NEXTFLOW_MODULE to a module your" >&2
+    echo "  cluster provides (current value: ${NEXTFLOW_MODULE})." >&2
+    exit 1
+fi
+
+# ---- Banner ----------------------------------------------------------------
+echo "=== citeseq-nf default workflow === $(date)"
+echo "Job:          ${JOB_ID:-<no JOB_ID>} on $(hostname)"
+echo "CITESEQ_NF:   ${CITESEQ_NF}"
+echo "PROJECT:      ${PROJECT}"
+echo "CONDA_ENV:    ${CONDA_ENV}"
+echo "PANEL:        ${PANEL}"
+echo "GPU queues:   totalVI=${GPU_QUEUE_TOTALVI}  scVI=${GPU_QUEUE_SCVI}"
+echo "DATA_ROOT:    ${DATA_ROOT}"
+echo "Metadata:     ${SAMPLE_METADATA_JSON:-<unset>}"
+echo "Forced HVGs:  ${FORCED_HVGS_FILE:-<unset>}"
+echo "Bio marker:   ${BIO_SEP_MARKER:-<unset>}"
+echo "N libraries:  ${N_LIBRARIES:-<unset>}"
+echo "Scratch:      ${SCRATCH}"
+echo "Nextflow:     $(command -v nextflow) ($(nextflow -v 2>&1 | head -1))"
+echo
+
+# ---- Build the pipeline command --------------------------------------------
+NF_ARGS=(
+    run "${CITESEQ_NF}/main.nf"
+    -profile sge
+    -resume
+    -ansi-log false
+    --project_root "${PROJECT}"
+    --outdir       "${PROJECT}"
+    --conda_env    "${CONDA_ENV}"
+    --panel        "${PANEL}"
+    --sge_gpu_totalvi_queue "${GPU_QUEUE_TOTALVI}"
+    --sge_gpu_scvi_queue    "${GPU_QUEUE_SCVI}"
+)
+NF_ARGS+=( --data_root "${DATA_ROOT}" )
+if [ -n "${SAMPLE_METADATA_JSON}" ]; then
+    NF_ARGS+=( --sample_metadata_json "${SAMPLE_METADATA_JSON}" )
+fi
+if [ -n "${FORCED_HVGS_FILE}" ]; then
+    NF_ARGS+=( --forced_hvgs_file "${FORCED_HVGS_FILE}" )
+fi
+if [ -n "${BIO_SEP_MARKER}" ]; then
+    NF_ARGS+=( --biological_separation_marker "${BIO_SEP_MARKER}" )
+fi
+if [ -n "${N_LIBRARIES}" ]; then
+    NF_ARGS+=( --n_libraries "${N_LIBRARIES}" )
+fi
+
+# ---- Run --------------------------------------------------------------------
+# Do not stop on a pipeline error. We still want the output check below to run,
+# because it shows which outputs exist. The exit code at the end reports both.
+set +e
+"${CITESEQ_NF}/run.sh" "${NF_ARGS[@]}"
+NF_STATUS=$?
+set -e
+
+echo
+echo "=== Pipeline finished with exit code ${NF_STATUS} === $(date)"
+
+# ---- Verify the expected outputs exist -------------------------------------
+echo
+echo "=== Verifying expected outputs under ${PROJECT} ==="
+EXPECTED=(
+    "${PROJECT}/data/processed/adata_totalvi.h5ad"
+    "${PROJECT}/data/processed/adata_scvi.h5ad"
+    "${PROJECT}/data/processed/adata_qc_embedded.h5ad"
+    "${PROJECT}/models/totalvi_model/model.pt"
+    "${PROJECT}/models/scvi_model/model.pt"
+)
+MISSING=0
+for f in "${EXPECTED[@]}"; do
+    if [ -e "${f}" ]; then
+        echo "  OK    ${f} ($(stat -c %y "${f}" 2>/dev/null || echo 'mtime unknown'))"
+    else
+        echo "  MISS  ${f}"
+        MISSING=$((MISSING + 1))
+    fi
+done
+
+TOTAL=${#EXPECTED[@]}
+FOUND=$((TOTAL - MISSING))
+echo
+if [ "${NF_STATUS}" -eq 0 ] && [ "${MISSING}" -eq 0 ]; then
+    echo "RESULT: PASS - pipeline exit 0, ${FOUND}/${TOTAL} expected outputs present"
+    echo "=== Done === $(date)"
+    exit 0
+fi
+
+echo "RESULT: FAIL - pipeline exit ${NF_STATUS}, ${FOUND}/${TOTAL} expected outputs present"
+echo "=== Done === $(date)"
+if [ "${NF_STATUS}" -ne 0 ]; then
+    exit "${NF_STATUS}"
+fi
+exit 1

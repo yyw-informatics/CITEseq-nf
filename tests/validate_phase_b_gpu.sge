@@ -1,0 +1,458 @@
+#!/bin/bash
+#$ -N validate_phase_b
+#$ -cwd
+#$ -j y
+#$ -o logs/validate_phase_b_$JOB_ID.log
+# Resource requests are a starting point only. On a different cluster you
+# may need to change the runtime, the memory, and the number of slots.
+# This job itself does not use a GPU. It submits the GPU work to the queues
+# named by GPU_QUEUE_TOTALVI and GPU_QUEUE_SCVI.
+#$ -l h_rt=8:00:00
+#$ -pe smp 4
+#$ -l h_vmem=32G
+
+# Phase B regression check (totalVI + scVI embedding).
+#
+# What it does:
+#   1. Reads the Phase B outputs already on disk and saves their numbers as
+#      a baseline (cell count, gene count, latent size, obsm keys, last ELBO).
+#   2. Runs the citeseq-nf pipeline from the HVG checkpoint (can be skipped).
+#   3. Compares the new outputs against that baseline.
+#
+# Why not an exact file diff: totalVI and scVI are stochastic. Two runs never
+# give byte-identical files. So the script checks invariants with a tolerance:
+#   - the h5ad files and model directories exist, and model.pt is present
+#   - cell count within 0.5 percent of the baseline
+#   - gene count identical to the baseline
+#   - latent size equal to the value in scripts/config.py
+#   - protein_denoised and protein_fg_prob have one column per functional
+#     ADT marker in your panel YAML
+#   - the set of obsm keys is the same as the baseline
+#   - last ELBO within 2 percent of the baseline
+#
+# Variables you must set:
+#   PROJECT             study root, holding data/, results/, models/, figures/
+#   CONDA_ENV           conda env built from env/environment.yml
+#   PANEL               ADT panel YAML
+#   DATA_ROOT           CellRanger input root, one subdirectory per library.
+#                       Needed even for a compare-only run, because
+#                       scripts/config.py refuses to import without it.
+#   GPU_QUEUE_TOTALVI   GPU queue for totalVI, for example 'gpu.q@some-host'
+#   GPU_QUEUE_SCVI      GPU queue for scVI
+#
+# Optional variables:
+#   SAMPLE_METADATA_JSON   passed as --sample_metadata_json
+#   FORCED_HVGS_FILE       passed as --forced_hvgs_file
+#   BIO_SEP_MARKER         passed as --biological_separation_marker
+#   N_LIBRARIES            passed as --n_libraries
+#   NEXTFLOW_MODULE        module to load, default nextflow/25.10.4
+#   SCRATCH                temp dir for the baseline file, default ${TMPDIR:-/tmp}
+#   CITESEQ_NF             path to this repo, needed under qsub (see below)
+#   SKIP_NEXTFLOW=1        compare existing files only, do not run the pipeline
+#
+# Usage:
+#   cd <your study root>          # so the -cwd log path below resolves
+#   mkdir -p logs
+#   export PROJECT="$PWD"
+#   export CONDA_ENV=<path to the cite_seq env>
+#   export PANEL=<path to your panel YAML>
+#   export DATA_ROOT=<path to your cellranger outputs>
+#   export GPU_QUEUE_TOTALVI='gpu.q@<your-gpu-host>'
+#   export GPU_QUEUE_SCVI='gpu.q@<your-gpu-host>'
+#   export CITESEQ_NF=<path to the citeseq-nf repo>
+#   qsub -V <path to citeseq-nf>/tests/validate_phase_b_gpu.sge
+#
+#   Compare only, no pipeline run:
+#   qsub -V -v SKIP_NEXTFLOW=1 <path to citeseq-nf>/tests/validate_phase_b_gpu.sge
+#
+# Why CITESEQ_NF is needed under qsub: SGE copies the script to a spool
+# directory before it runs, so the script cannot always find the repo from
+# its own path. The block below tries the script path first and falls back
+# to CITESEQ_NF.
+
+set -euo pipefail
+
+# --- Locate the citeseq-nf repo ------------------------------------
+# The script lives in <repo>/tests/, so the repo is one level up.
+CITESEQ_NF_FROM_PATH="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+if [ -n "${CITESEQ_NF_FROM_PATH}" ] && [ -f "${CITESEQ_NF_FROM_PATH}/main.nf" ]; then
+    CITESEQ_NF="${CITESEQ_NF_FROM_PATH}"
+elif [ -n "${CITESEQ_NF:-}" ] && [ -f "${CITESEQ_NF}/main.nf" ]; then
+    :   # the caller told us where the repo is, and it looks right
+else
+    echo "ERROR: cannot find the citeseq-nf repo." >&2
+    echo "  Tried the script path: ${CITESEQ_NF_FROM_PATH:-<none>}" >&2
+    echo "  Tried CITESEQ_NF:      ${CITESEQ_NF:-<unset>}" >&2
+    echo "  Set CITESEQ_NF to the repo root (the directory holding main.nf)" >&2
+    echo "  and submit again with 'qsub -V'." >&2
+    exit 1
+fi
+export CITESEQ_NF
+
+# --- Required settings, checked before anything slow ---------------
+: "${PROJECT:?set PROJECT to your study root, the directory holding data/, results/, models/ and figures/}"
+: "${CONDA_ENV:?set CONDA_ENV to the conda env built from env/environment.yml}"
+: "${PANEL:?set PANEL to your ADT panel YAML, see panels/example_panel.yaml}"
+: "${DATA_ROOT:?set DATA_ROOT to your CellRanger input root, one subdirectory per library}"
+# This script validates the GPU steps (06 totalVI, 07 scVI), so both queue
+# names are always required. Queue names differ on every cluster, so nothing
+# is hardcoded here or in the SGE directives above.
+: "${GPU_QUEUE_TOTALVI:?set GPU_QUEUE_TOTALVI to your GPU queue for totalVI, for example gpu.q@some-host}"
+: "${GPU_QUEUE_SCVI:?set GPU_QUEUE_SCVI to your GPU queue for scVI, for example gpu.q@some-host}"
+
+SKIP_NEXTFLOW="${SKIP_NEXTFLOW:-0}"
+
+# --- Derived paths -------------------------------------------------
+PYTHON="${CONDA_ENV}/bin/python"
+ENV_LIB="${CONDA_ENV}/lib"
+NEXTFLOW_MODULE="${NEXTFLOW_MODULE:-nextflow/25.10.4}"
+SCRATCH="${SCRATCH:-${TMPDIR:-/tmp}}"
+BASELINE_JSON="${SCRATCH}/phase_b_baseline_${JOB_ID:-$$}.json"
+
+# --- Check the settings point at real things -----------------------
+if [ ! -d "${PROJECT}" ]; then
+    echo "ERROR: PROJECT is not a directory: ${PROJECT}" >&2
+    exit 1
+fi
+if [ ! -x "${PYTHON}" ]; then
+    echo "ERROR: no python in the conda env: ${PYTHON}" >&2
+    echo "  Check CONDA_ENV. It must be the env built from env/environment.yml." >&2
+    exit 1
+fi
+if [ ! -f "${PANEL}" ]; then
+    echo "ERROR: panel YAML not found: ${PANEL}" >&2
+    exit 1
+fi
+if [ ! -d "${DATA_ROOT}" ]; then
+    echo "ERROR: DATA_ROOT is not a directory: ${DATA_ROOT}" >&2
+    exit 1
+fi
+
+# --- Job environment -----------------------------------------------
+export LD_LIBRARY_PATH="${ENV_LIB}:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=${NSLOTS:-4}
+export MKL_NUM_THREADS=${NSLOTS:-4}
+export MALLOC_ARENA_MAX=2
+export MALLOC_TRIM_THRESHOLD_=0
+export TMPDIR="${SCRATCH}"
+
+# scripts/config.py reads these. The Python blocks below import it directly,
+# so they must be exported here as well as passed to the pipeline.
+export CITESEQ_PROJECT_ROOT="${PROJECT}"
+export CITESEQ_DATA_ROOT="${DATA_ROOT}"
+export CITESEQ_PANEL_YAML="${PANEL}"
+
+echo "=== Phase B Validation (GPU model steps) ==="
+echo "Job:           ${JOB_ID:-<no job id>} on $(hostname) at $(date)"
+echo "citeseq-nf:    ${CITESEQ_NF}"
+echo "PROJECT:       ${PROJECT}"
+echo "CONDA_ENV:     ${CONDA_ENV}"
+echo "PANEL:         ${PANEL}"
+echo "DATA_ROOT:     ${DATA_ROOT}"
+echo "GPU queues:    totalVI=${GPU_QUEUE_TOTALVI}  scVI=${GPU_QUEUE_SCVI}"
+echo "SCRATCH:       ${SCRATCH}"
+echo "SKIP_NEXTFLOW: ${SKIP_NEXTFLOW}"
+echo "Optional:      sample_metadata_json=${SAMPLE_METADATA_JSON:-<unset>}"
+echo "               forced_hvgs_file=${FORCED_HVGS_FILE:-<unset>}"
+echo "               biological_separation_marker=${BIO_SEP_MARKER:-<unset>}"
+echo "               n_libraries=${N_LIBRARIES:-<unset>}"
+
+cd "${PROJECT}"
+
+# Remove the baseline file whatever happens, including on an early exit.
+trap 'rm -f "${BASELINE_JSON}"' EXIT
+
+# --- 1. Record baseline numbers before the pipeline runs ------------
+echo ""
+echo "=== Capturing baseline metrics === $(date)"
+
+# The repo path and the output path are passed as arguments, not pasted
+# into the Python source.
+"${PYTHON}" - "${CITESEQ_NF}" "${BASELINE_JSON}" <<'PYEOF'
+import json
+import os
+import sys
+
+import anndata as ad
+
+repo_root, baseline_out = sys.argv[1:3]
+sys.path.insert(0, os.path.join(repo_root, "scripts"))
+from config import PROCESSED_DIR, RESULTS_PHASE2_EMBEDDING
+
+metrics = {}
+
+# totalVI baseline
+tvi_path = os.path.join(PROCESSED_DIR, 'adata_totalvi.h5ad')
+if os.path.exists(tvi_path):
+    adata = ad.read_h5ad(tvi_path, backed='r')
+    metrics['totalvi'] = {
+        'shape': list(adata.shape),
+        'n_latent': int(adata.obsm['X_totalVI'].shape[1]) if 'X_totalVI' in adata.obsm else -1,
+        'obsm_keys': sorted(list(adata.obsm.keys())),
+    }
+    adata.file.close() if hasattr(adata, 'file') and adata.file else None
+else:
+    print(f'WARNING: no baseline totalVI at {tvi_path}', file=sys.stderr)
+
+# scVI baseline
+scvi_path = os.path.join(PROCESSED_DIR, 'adata_scvi.h5ad')
+if os.path.exists(scvi_path):
+    adata = ad.read_h5ad(scvi_path, backed='r')
+    metrics['scvi'] = {
+        'shape': list(adata.shape),
+        'n_latent': int(adata.obsm['X_scVI'].shape[1]) if 'X_scVI' in adata.obsm else -1,
+        'obsm_keys': sorted(list(adata.obsm.keys())),
+    }
+    adata.file.close() if hasattr(adata, 'file') and adata.file else None
+else:
+    print(f'WARNING: no baseline scVI at {scvi_path}', file=sys.stderr)
+
+# totalVI training history (last ELBO)
+hist_path = os.path.join(RESULTS_PHASE2_EMBEDDING, 'totalvi_training_history.csv')
+if os.path.exists(hist_path):
+    import pandas as pd
+    hist = pd.read_csv(hist_path)
+    metrics['totalvi_elbo_last'] = float(hist.iloc[-1, -1])
+    metrics['totalvi_n_epochs'] = len(hist)
+else:
+    print(f'WARNING: no baseline training history at {hist_path}', file=sys.stderr)
+
+with open(baseline_out, 'w') as f:
+    json.dump(metrics, f, indent=2)
+print(json.dumps(metrics, indent=2))
+PYEOF
+
+echo "Baseline saved to ${BASELINE_JSON}"
+
+# --- 2. Run the pipeline (unless skipped) --------------------------
+if [ "${SKIP_NEXTFLOW}" != "1" ]; then
+    echo ""
+    echo "=== Running citeseq-nf Phase B (entry from_hvg) === $(date)"
+
+    # Find nextflow. Use it if it is already on PATH. Otherwise try the
+    # module system. A new cluster may name the module differently, so
+    # NEXTFLOW_MODULE can be changed by the caller.
+    if ! command -v nextflow >/dev/null 2>&1; then
+        if [ -f /etc/profile.d/modules.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /etc/profile.d/modules.sh
+            set -u
+        fi
+        if command -v module >/dev/null 2>&1; then
+            module load "${NEXTFLOW_MODULE}" || true
+        fi
+    fi
+    if ! command -v nextflow >/dev/null 2>&1; then
+        echo "ERROR: nextflow not found." >&2
+        echo "  Put nextflow on your PATH, or set NEXTFLOW_MODULE to the module" >&2
+        echo "  name on your cluster (current value: ${NEXTFLOW_MODULE})." >&2
+        exit 1
+    fi
+    echo "nextflow: $(command -v nextflow)"
+
+    # Optional params are only passed when the caller set them, so the
+    # pipeline keeps its own defaults otherwise.
+    NF_OPTS=()
+    if [ -n "${SAMPLE_METADATA_JSON:-}" ]; then
+        NF_OPTS+=(--sample_metadata_json "${SAMPLE_METADATA_JSON}")
+    fi
+    if [ -n "${FORCED_HVGS_FILE:-}" ]; then
+        NF_OPTS+=(--forced_hvgs_file "${FORCED_HVGS_FILE}")
+    fi
+    if [ -n "${BIO_SEP_MARKER:-}" ]; then
+        NF_OPTS+=(--biological_separation_marker "${BIO_SEP_MARKER}")
+    fi
+    if [ -n "${N_LIBRARIES:-}" ]; then
+        NF_OPTS+=(--n_libraries "${N_LIBRARIES}")
+    fi
+
+    NF_STATUS=0
+    "${CITESEQ_NF}/run.sh" run "${CITESEQ_NF}/main.nf" \
+        -entry from_hvg \
+        -profile sge \
+        -resume \
+        -ansi-log false \
+        --project_root "${PROJECT}" \
+        --outdir       "${PROJECT}" \
+        --conda_env    "${CONDA_ENV}" \
+        --panel        "${PANEL}" \
+        --data_root    "${DATA_ROOT}" \
+        --sge_gpu_totalvi_queue "${GPU_QUEUE_TOTALVI}" \
+        --sge_gpu_scvi_queue    "${GPU_QUEUE_SCVI}" \
+        ${NF_OPTS[@]+"${NF_OPTS[@]}"} \
+        2>&1 || NF_STATUS=$?
+
+    echo "Nextflow exit status: ${NF_STATUS}"
+    if [ "${NF_STATUS}" -ne 0 ]; then
+        echo "ERROR: the pipeline run failed. Skipping the comparison."
+        exit "${NF_STATUS}"
+    fi
+    echo "Phase B run complete at $(date)"
+else
+    echo "SKIP_NEXTFLOW=1: skipping the run, comparing the files already on disk."
+fi
+
+# --- 3. Invariant validation ---------------------------------------
+echo ""
+echo "=== Invariant Validation === $(date)"
+
+VALIDATION_STATUS=0
+"${PYTHON}" - "${CITESEQ_NF}" "${BASELINE_JSON}" <<'PYEOF' || VALIDATION_STATUS=$?
+import json
+import os
+import sys
+
+import anndata as ad
+
+repo_root, baseline_path = sys.argv[1:3]
+sys.path.insert(0, os.path.join(repo_root, "scripts"))
+from config import (
+    ADT_FUNCTIONAL_MARKERS,
+    MODELS_DIR,
+    PROCESSED_DIR,
+    RESULTS_PHASE2_EMBEDDING,
+    SCVI_N_LATENT,
+    TOTALVI_N_LATENT,
+)
+
+with open(baseline_path) as f:
+    baseline = json.load(f)
+
+PASS = 0
+FAIL = 0
+
+
+def check(name, condition, detail):
+    global PASS, FAIL
+    if condition:
+        print(f"  PASS: {name}: {detail}")
+        PASS += 1
+    else:
+        print(f"  FAIL: {name}: {detail}")
+        FAIL += 1
+
+
+# --- totalVI checks ---
+print("\n--- Step 06: totalVI ---")
+
+tvi_path = os.path.join(PROCESSED_DIR, "adata_totalvi.h5ad")
+tvi_model = os.path.join(MODELS_DIR, "totalvi_model")
+
+check("h5ad exists", os.path.exists(tvi_path), tvi_path)
+check("model dir exists", os.path.isdir(tvi_model), tvi_model)
+check("model.pt exists", os.path.exists(os.path.join(tvi_model, "model.pt")),
+      os.path.join(tvi_model, "model.pt"))
+
+if os.path.exists(tvi_path):
+    adata = ad.read_h5ad(tvi_path)
+
+    if "totalvi" in baseline:
+        bl = baseline["totalvi"]
+        n_cells_bl = bl["shape"][0]
+        n_cells = adata.shape[0]
+        pct_diff = abs(n_cells - n_cells_bl) / n_cells_bl * 100
+        check("cell count", pct_diff <= 0.5,
+              f"current={n_cells} baseline={n_cells_bl} diff={pct_diff:.2f}%")
+
+        n_genes_bl = bl["shape"][1]
+        check("gene count", adata.shape[1] == n_genes_bl,
+              f"current={adata.shape[1]} baseline={n_genes_bl}")
+
+    if "X_totalVI" in adata.obsm:
+        lat_dim = adata.obsm["X_totalVI"].shape[1]
+        check("latent dim", lat_dim == TOTALVI_N_LATENT,
+              f"current={lat_dim} expected={TOTALVI_N_LATENT}")
+    else:
+        check("X_totalVI exists", False, "missing from obsm")
+
+    # Both protein matrices must have one column per functional ADT marker.
+    # The marker list comes from the panel YAML, so it follows your panel.
+    if "protein_denoised" in adata.obsm:
+        n_prot = adata.obsm["protein_denoised"].shape[1]
+        check("protein_denoised markers", n_prot == len(ADT_FUNCTIONAL_MARKERS),
+              f"current={n_prot} expected={len(ADT_FUNCTIONAL_MARKERS)}")
+    else:
+        check("protein_denoised exists", False, "missing from obsm")
+
+    if "protein_fg_prob" in adata.obsm:
+        n_fg = adata.obsm["protein_fg_prob"].shape[1]
+        check("protein_fg_prob markers", n_fg == len(ADT_FUNCTIONAL_MARKERS),
+              f"current={n_fg} expected={len(ADT_FUNCTIONAL_MARKERS)}")
+    else:
+        check("protein_fg_prob exists", False, "missing from obsm")
+
+    if "totalvi" in baseline:
+        bl_keys = set(baseline["totalvi"]["obsm_keys"])
+        cur_keys = set(adata.obsm.keys())
+        check("obsm keys match", bl_keys == cur_keys,
+              f"baseline={sorted(bl_keys)} current={sorted(cur_keys)}")
+
+    del adata
+
+# Training history: last ELBO within 2 percent of the baseline.
+hist_path = os.path.join(RESULTS_PHASE2_EMBEDDING, "totalvi_training_history.csv")
+check("training history exists", os.path.exists(hist_path), hist_path)
+if os.path.exists(hist_path) and "totalvi_elbo_last" in baseline:
+    import pandas as pd
+    hist = pd.read_csv(hist_path)
+    elbo_last = float(hist.iloc[-1, -1])
+    elbo_bl = baseline["totalvi_elbo_last"]
+    elbo_pct = abs(elbo_last - elbo_bl) / abs(elbo_bl) * 100
+    check("ELBO within 2%", elbo_pct <= 2.0,
+          f"current={elbo_last:.1f} baseline={elbo_bl:.1f} diff={elbo_pct:.2f}%")
+
+# --- scVI checks ---
+print("\n--- Step 07: scVI ---")
+
+scvi_path = os.path.join(PROCESSED_DIR, "adata_scvi.h5ad")
+scvi_model = os.path.join(MODELS_DIR, "scvi_model")
+
+check("h5ad exists", os.path.exists(scvi_path), scvi_path)
+check("model dir exists", os.path.isdir(scvi_model), scvi_model)
+check("model.pt exists", os.path.exists(os.path.join(scvi_model, "model.pt")),
+      os.path.join(scvi_model, "model.pt"))
+
+if os.path.exists(scvi_path):
+    adata = ad.read_h5ad(scvi_path)
+
+    if "scvi" in baseline:
+        bl = baseline["scvi"]
+        n_cells_bl = bl["shape"][0]
+        n_cells = adata.shape[0]
+        pct_diff = abs(n_cells - n_cells_bl) / n_cells_bl * 100
+        check("cell count", pct_diff <= 0.5,
+              f"current={n_cells} baseline={n_cells_bl} diff={pct_diff:.2f}%")
+
+        n_genes_bl = bl["shape"][1]
+        check("gene count", adata.shape[1] == n_genes_bl,
+              f"current={adata.shape[1]} baseline={n_genes_bl}")
+
+    if "X_scVI" in adata.obsm:
+        lat_dim = adata.obsm["X_scVI"].shape[1]
+        check("latent dim", lat_dim == SCVI_N_LATENT,
+              f"current={lat_dim} expected={SCVI_N_LATENT}")
+    else:
+        check("X_scVI exists", False, "missing from obsm")
+
+    if "scvi" in baseline:
+        bl_keys = set(baseline["scvi"]["obsm_keys"])
+        cur_keys = set(adata.obsm.keys())
+        check("obsm keys match", bl_keys == cur_keys,
+              f"baseline={sorted(bl_keys)} current={sorted(cur_keys)}")
+
+    del adata
+
+# --- Summary ---
+print(f"\n{'='*60}")
+print(f"Summary: {PASS} PASS, {FAIL} FAIL")
+if FAIL > 0:
+    print("VALIDATION FAILED. Check the details above.")
+    sys.exit(1)
+else:
+    print("ALL INVARIANT CHECKS PASSED")
+PYEOF
+
+echo ""
+echo "=== Done === $(date)"
+exit "${VALIDATION_STATUS}"

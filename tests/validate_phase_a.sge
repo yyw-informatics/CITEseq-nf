@@ -1,0 +1,437 @@
+#!/bin/bash
+#$ -N validate_phase_a
+#$ -cwd
+#$ -j y
+#$ -o logs/validate_phase_a_$JOB_ID.log
+# Resource requests are a starting point only. On a different cluster you
+# may need to change the runtime, the memory, and the number of slots.
+#$ -l h_rt=8:00:00
+#$ -pe smp 2
+#$ -l h_vmem=16G
+
+# Phase A regression check (QC foundation).
+#
+# What it does:
+#   1. Runs the citeseq-nf pipeline with Nextflow (can be skipped).
+#   2. Compares the Phase A output files against a baseline copy that is
+#      already on disk at <PROJECT>/data/processed/phase_a_baseline/.
+#
+# This script does NOT create the baseline. It only compares against one.
+# If you have no baseline yet, use tests/validate_citeseq_nf_e2e.sge, which
+# builds a fresh baseline itself.
+#
+# Note on scope: citeseq-nf has no "Phase A only" entry point. The default
+# workflow runs Phase A and then Phase B, and Phase B trains totalVI and
+# scVI on a GPU. So a real run here also needs the two GPU queue names.
+# Only the Phase A files are compared afterwards. Use SKIP_NEXTFLOW=1 to
+# compare files that already exist and skip the run (no GPU needed).
+#
+# Variables you must set:
+#   PROJECT       study root, holding data/, results/, models/, figures/
+#   CONDA_ENV     conda env built from env/environment.yml
+#   PANEL         ADT panel YAML
+# Needed only when the pipeline actually runs (SKIP_NEXTFLOW is not 1):
+#   DATA_ROOT           CellRanger input root, one subdirectory per library
+#   GPU_QUEUE_TOTALVI   GPU queue for totalVI, for example 'gpu.q@some-host'
+#   GPU_QUEUE_SCVI      GPU queue for scVI
+#   plus SAMPLE_METADATA_JSON or N_LIBRARIES, so the pipeline knows how
+#   many libraries to process
+#
+# Optional variables:
+#   SAMPLE_METADATA_JSON   passed as --sample_metadata_json
+#   FORCED_HVGS_FILE       passed as --forced_hvgs_file
+#   BIO_SEP_MARKER         passed as --biological_separation_marker
+#   N_LIBRARIES            passed as --n_libraries
+#   NEXTFLOW_MODULE        module to load, default nextflow/25.10.4
+#   SCRATCH                temp dir for sort and diff, default ${TMPDIR:-/tmp}
+#   CITESEQ_NF             path to this repo, needed under qsub (see below)
+#   SKIP_NEXTFLOW=1        compare existing files only, do not run the pipeline
+#
+# Usage:
+#   cd <your study root>          # so the -cwd log path below resolves
+#   mkdir -p logs
+#   export PROJECT="$PWD"
+#   export CONDA_ENV=<path to the cite_seq env>
+#   export PANEL=<path to your panel YAML>
+#   export DATA_ROOT=<path to your cellranger outputs>
+#   export GPU_QUEUE_TOTALVI='gpu.q@<your-gpu-host>'
+#   export GPU_QUEUE_SCVI='gpu.q@<your-gpu-host>'
+#   export SAMPLE_METADATA_JSON=<path to sample_metadata.json>
+#   export CITESEQ_NF=<path to the citeseq-nf repo>
+#   qsub -V <path to citeseq-nf>/tests/validate_phase_a.sge
+#
+#   Compare only, no pipeline run:
+#   qsub -V -v SKIP_NEXTFLOW=1 <path to citeseq-nf>/tests/validate_phase_a.sge
+#
+# Why CITESEQ_NF is needed under qsub: SGE copies the script to a spool
+# directory before it runs, so the script cannot always find the repo from
+# its own path. The block below tries the script path first and falls back
+# to CITESEQ_NF.
+
+set -euo pipefail
+
+# --- Locate the citeseq-nf repo ------------------------------------
+# The script lives in <repo>/tests/, so the repo is one level up.
+CITESEQ_NF_FROM_PATH="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+if [ -n "${CITESEQ_NF_FROM_PATH}" ] && [ -f "${CITESEQ_NF_FROM_PATH}/main.nf" ]; then
+    CITESEQ_NF="${CITESEQ_NF_FROM_PATH}"
+elif [ -n "${CITESEQ_NF:-}" ] && [ -f "${CITESEQ_NF}/main.nf" ]; then
+    :   # the caller told us where the repo is, and it looks right
+else
+    echo "ERROR: cannot find the citeseq-nf repo." >&2
+    echo "  Tried the script path: ${CITESEQ_NF_FROM_PATH:-<none>}" >&2
+    echo "  Tried CITESEQ_NF:      ${CITESEQ_NF:-<unset>}" >&2
+    echo "  Set CITESEQ_NF to the repo root (the directory holding main.nf)" >&2
+    echo "  and submit again with 'qsub -V'." >&2
+    exit 1
+fi
+export CITESEQ_NF
+
+# --- Required settings, checked before anything slow ---------------
+: "${PROJECT:?set PROJECT to your study root, the directory holding data/, results/, models/ and figures/}"
+: "${CONDA_ENV:?set CONDA_ENV to the conda env built from env/environment.yml}"
+: "${PANEL:?set PANEL to your ADT panel YAML, see panels/example_panel.yaml}"
+
+SKIP_NEXTFLOW="${SKIP_NEXTFLOW:-0}"
+
+if [ "${SKIP_NEXTFLOW}" != "1" ]; then
+    : "${DATA_ROOT:?set DATA_ROOT to your CellRanger input root, one subdirectory per library}"
+    : "${GPU_QUEUE_TOTALVI:?set GPU_QUEUE_TOTALVI to your GPU queue for totalVI, for example gpu.q@some-host}"
+    : "${GPU_QUEUE_SCVI:?set GPU_QUEUE_SCVI to your GPU queue for scVI, for example gpu.q@some-host}"
+    if [ -z "${SAMPLE_METADATA_JSON:-}" ] && [ -z "${N_LIBRARIES:-}" ]; then
+        echo "ERROR: the pipeline cannot tell how many libraries to process." >&2
+        echo "  Set SAMPLE_METADATA_JSON to a JSON file with one key per library," >&2
+        echo "  or set N_LIBRARIES to the number of libraries." >&2
+        exit 1
+    fi
+fi
+
+# --- Derived paths -------------------------------------------------
+PYTHON="${CONDA_ENV}/bin/python"
+RSCRIPT="${CONDA_ENV}/bin/Rscript"
+ENV_LIB="${CONDA_ENV}/lib"
+PROCESSED="${PROJECT}/data/processed"
+BASELINE_DIR="${PROCESSED}/phase_a_baseline"
+NEXTFLOW_MODULE="${NEXTFLOW_MODULE:-nextflow/25.10.4}"
+SCRATCH="${SCRATCH:-${TMPDIR:-/tmp}}"
+
+# --- Check the settings point at real things -----------------------
+if [ ! -d "${PROJECT}" ]; then
+    echo "ERROR: PROJECT is not a directory: ${PROJECT}" >&2
+    exit 1
+fi
+if [ ! -x "${PYTHON}" ]; then
+    echo "ERROR: no python in the conda env: ${PYTHON}" >&2
+    echo "  Check CONDA_ENV. It must be the env built from env/environment.yml." >&2
+    exit 1
+fi
+if [ ! -x "${RSCRIPT}" ]; then
+    echo "WARNING: no Rscript in the conda env: ${RSCRIPT}" >&2
+    echo "  The R steps of the pipeline (SoupX, DecontX, DSB, scDblFinder) will fail." >&2
+fi
+if [ ! -f "${PANEL}" ]; then
+    echo "ERROR: panel YAML not found: ${PANEL}" >&2
+    exit 1
+fi
+
+# --- Job environment -----------------------------------------------
+export LD_LIBRARY_PATH="${ENV_LIB}:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=${NSLOTS:-2}
+export MKL_NUM_THREADS=${NSLOTS:-2}
+export MALLOC_ARENA_MAX=2
+export MALLOC_TRIM_THRESHOLD_=0
+export TMPDIR="${SCRATCH}"
+
+echo "=== Phase A Validation ==="
+echo "Job:           ${JOB_ID:-<no job id>} on $(hostname) at $(date)"
+echo "citeseq-nf:    ${CITESEQ_NF}"
+echo "PROJECT:       ${PROJECT}"
+echo "CONDA_ENV:     ${CONDA_ENV}"
+echo "PANEL:         ${PANEL}"
+echo "DATA_ROOT:     ${DATA_ROOT:-<unset, pipeline run skipped>}"
+echo "BASELINE_DIR:  ${BASELINE_DIR}"
+echo "SCRATCH:       ${SCRATCH}"
+echo "SKIP_NEXTFLOW: ${SKIP_NEXTFLOW}"
+if [ "${SKIP_NEXTFLOW}" != "1" ]; then
+    echo "GPU queues:    totalVI=${GPU_QUEUE_TOTALVI}  scVI=${GPU_QUEUE_SCVI}"
+fi
+echo "Optional:      sample_metadata_json=${SAMPLE_METADATA_JSON:-<unset>}"
+echo "               forced_hvgs_file=${FORCED_HVGS_FILE:-<unset>}"
+echo "               biological_separation_marker=${BIO_SEP_MARKER:-<unset>}"
+echo "               n_libraries=${N_LIBRARIES:-<unset>}"
+
+cd "${PROJECT}"
+
+# --- 1. Verify the baseline exists ---------------------------------
+if [ ! -d "${BASELINE_DIR}" ]; then
+    echo "ERROR: baseline not found at ${BASELINE_DIR}/"
+    echo ""
+    echo "This script only compares against a baseline. It does not create one."
+    echo "For end-to-end testing that builds its own baseline, use"
+    echo "tests/validate_citeseq_nf_e2e.sge instead."
+    echo "To use this script, put a known-good copy of the Phase A output files"
+    echo "in ${BASELINE_DIR}/ first."
+    exit 1
+fi
+echo "Baseline: ${BASELINE_DIR}"
+
+# --- 2. Run the pipeline (unless skipped) --------------------------
+if [ "${SKIP_NEXTFLOW}" != "1" ]; then
+    echo ""
+    echo "=== Running the citeseq-nf pipeline === $(date)"
+
+    # Find nextflow. Use it if it is already on PATH. Otherwise try the
+    # module system. A new cluster may name the module differently, so
+    # NEXTFLOW_MODULE can be changed by the caller.
+    if ! command -v nextflow >/dev/null 2>&1; then
+        if [ -f /etc/profile.d/modules.sh ]; then
+            set +u
+            # shellcheck disable=SC1091
+            source /etc/profile.d/modules.sh
+            set -u
+        fi
+        if command -v module >/dev/null 2>&1; then
+            module load "${NEXTFLOW_MODULE}" || true
+        fi
+    fi
+    if ! command -v nextflow >/dev/null 2>&1; then
+        echo "ERROR: nextflow not found." >&2
+        echo "  Put nextflow on your PATH, or set NEXTFLOW_MODULE to the module" >&2
+        echo "  name on your cluster (current value: ${NEXTFLOW_MODULE})." >&2
+        exit 1
+    fi
+    echo "nextflow: $(command -v nextflow)"
+
+    # Optional params are only passed when the caller set them, so the
+    # pipeline keeps its own defaults otherwise.
+    NF_OPTS=()
+    if [ -n "${SAMPLE_METADATA_JSON:-}" ]; then
+        NF_OPTS+=(--sample_metadata_json "${SAMPLE_METADATA_JSON}")
+    fi
+    if [ -n "${FORCED_HVGS_FILE:-}" ]; then
+        NF_OPTS+=(--forced_hvgs_file "${FORCED_HVGS_FILE}")
+    fi
+    if [ -n "${BIO_SEP_MARKER:-}" ]; then
+        NF_OPTS+=(--biological_separation_marker "${BIO_SEP_MARKER}")
+    fi
+    if [ -n "${N_LIBRARIES:-}" ]; then
+        NF_OPTS+=(--n_libraries "${N_LIBRARIES}")
+    fi
+
+    NF_STATUS=0
+    "${CITESEQ_NF}/run.sh" run "${CITESEQ_NF}/main.nf" \
+        -profile sge \
+        -resume \
+        -ansi-log false \
+        --project_root "${PROJECT}" \
+        --outdir       "${PROJECT}" \
+        --conda_env    "${CONDA_ENV}" \
+        --panel        "${PANEL}" \
+        --data_root    "${DATA_ROOT}" \
+        --sge_gpu_totalvi_queue "${GPU_QUEUE_TOTALVI}" \
+        --sge_gpu_scvi_queue    "${GPU_QUEUE_SCVI}" \
+        ${NF_OPTS[@]+"${NF_OPTS[@]}"} \
+        2>&1 || NF_STATUS=$?
+
+    echo "Nextflow exit status: ${NF_STATUS}"
+    if [ "${NF_STATUS}" -ne 0 ]; then
+        echo "ERROR: the pipeline run failed. Skipping the comparison."
+        exit "${NF_STATUS}"
+    fi
+    echo "Pipeline run complete at $(date)"
+else
+    echo "SKIP_NEXTFLOW=1: skipping the run, comparing the files already on disk."
+fi
+
+# --- 3. Compare outputs against the baseline -----------------------
+# Every Python comparison runs inside if/then so that set -e does not kill
+# the script when a check fails (Python exits 1).
+echo ""
+echo "=== Output Comparison === $(date)"
+
+PASS=0
+FAIL=0
+SKIP=0
+
+compare_h5ad() {
+    local name="$1"
+    local baseline="${BASELINE_DIR}/${name}"
+    local current="${PROCESSED}/${name}"
+
+    if [ ! -f "${baseline}" ]; then
+        echo "SKIP: ${name} (not in baseline)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+    if [ ! -f "${current}" ]; then
+        echo "FAIL: ${name} (output file missing)"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    local result status
+    status=0
+    # Paths are passed as arguments, not pasted into the Python source.
+    result=$("${PYTHON}" - "${baseline}" "${current}" 2>&1 <<'PYEOF'
+import sys
+import anndata as ad
+
+baseline_path, current_path = sys.argv[1:3]
+b = ad.read_h5ad(baseline_path, backed='r')
+c = ad.read_h5ad(current_path, backed='r')
+checks = []
+ok = True
+
+# Shape
+if b.shape == c.shape:
+    checks.append(f'  shape: {c.shape} OK')
+else:
+    checks.append(f'  shape: baseline={b.shape} current={c.shape} MISMATCH')
+    ok = False
+
+# Obs columns
+b_cols = set(b.obs.columns)
+c_cols = set(c.obs.columns)
+if b_cols == c_cols:
+    checks.append(f'  obs columns: {len(c_cols)} OK')
+else:
+    missing = b_cols - c_cols
+    extra = c_cols - b_cols
+    if missing: checks.append(f'  obs columns MISSING: {sorted(missing)}')
+    if extra: checks.append(f'  obs columns EXTRA: {sorted(extra)}')
+    ok = False
+
+# Layers
+b_layers = set(b.layers.keys()) if b.layers else set()
+c_layers = set(c.layers.keys()) if c.layers else set()
+if b_layers == c_layers:
+    checks.append(f'  layers: {sorted(c_layers)} OK')
+elif b_layers or c_layers:
+    checks.append(f'  layers MISMATCH: baseline={sorted(b_layers)} current={sorted(c_layers)}')
+    ok = False
+
+# obsm keys
+b_obsm = set(b.obsm.keys()) if b.obsm else set()
+c_obsm = set(c.obsm.keys()) if c.obsm else set()
+if b_obsm == c_obsm:
+    checks.append(f'  obsm: {sorted(c_obsm)} OK')
+elif b_obsm or c_obsm:
+    checks.append(f'  obsm MISMATCH: baseline={sorted(b_obsm)} current={sorted(c_obsm)}')
+    ok = False
+
+print('\n'.join(checks))
+b.file.close() if hasattr(b, 'file') and b.file else None
+c.file.close() if hasattr(c, 'file') and c.file else None
+sys.exit(0 if ok else 1)
+PYEOF
+    ) || status=$?
+
+    echo "${result}"
+    # A non-zero exit also catches a Python crash, which the text search
+    # on its own would miss.
+    if [ "${status}" -ne 0 ] || echo "${result}" | grep -q "MISMATCH\|MISSING"; then
+        echo "FAIL: ${name}"
+        FAIL=$((FAIL + 1))
+    else
+        echo "PASS: ${name}"
+        PASS=$((PASS + 1))
+    fi
+}
+
+compare_csv_exact() {
+    local name="$1"
+    local baseline="${BASELINE_DIR}/${name}"
+    local current="${PROCESSED}/${name}"
+
+    if [ ! -f "${baseline}" ]; then
+        echo "SKIP: ${name} (not in baseline)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+    if [ ! -f "${current}" ]; then
+        echo "FAIL: ${name} (output file missing)"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    if diff <(head -1 "${baseline}" && tail -n +2 "${baseline}" | sort) \
+            <(head -1 "${current}" && tail -n +2 "${current}" | sort) > /dev/null 2>&1; then
+        echo "PASS: ${name} (exact match after row sort)"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL: ${name} (content differs)"
+        diff <(head -1 "${baseline}" && tail -n +2 "${baseline}" | sort) \
+             <(head -1 "${current}" && tail -n +2 "${current}" | sort) | head -20 || true
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+compare_csv_shape() {
+    local name="$1"
+    local baseline="${BASELINE_DIR}/${name}"
+    local current="${PROCESSED}/${name}"
+
+    if [ ! -f "${baseline}" ]; then
+        echo "SKIP: ${name} (not in baseline)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+    if [ ! -f "${current}" ]; then
+        echo "FAIL: ${name} (output file missing)"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    local b_lines c_lines b_cols c_cols
+    b_lines=$(wc -l < "${baseline}")
+    c_lines=$(wc -l < "${current}")
+    b_cols=$(head -1 "${baseline}" | tr ',' '\n' | wc -l)
+    c_cols=$(head -1 "${current}" | tr ',' '\n' | wc -l)
+
+    if [ "${b_lines}" = "${c_lines}" ] && [ "${b_cols}" = "${c_cols}" ]; then
+        echo "PASS: ${name} (shape: ${c_lines} rows x ${c_cols} cols)"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL: ${name} (shape mismatch: baseline=${b_lines}x${b_cols} current=${c_lines}x${c_cols})"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+echo ""
+echo "--- Step 02: DSB ---"
+compare_csv_shape "dsb_normalized_adt.csv"
+
+echo ""
+echo "--- Step 03: CLR ---"
+compare_h5ad "adata_qc_clr.h5ad"
+
+echo ""
+echo "--- Step 04: RNA Normalization ---"
+compare_h5ad "adata_normalized.h5ad"
+compare_h5ad "adata_qc_hvg.h5ad"
+
+echo ""
+echo "--- Step 05a: ThresholdR ---"
+compare_csv_exact "thresholdr_thresholds.csv"
+
+echo ""
+echo "--- Step 01: QC (shared file, should match exactly) ---"
+compare_h5ad "adata_qc.h5ad"
+
+echo ""
+echo "=== Summary ==="
+echo "PASS: ${PASS}  FAIL: ${FAIL}  SKIP: ${SKIP}"
+if [ $((PASS + FAIL)) -eq 0 ]; then
+    echo "VALIDATION FAILED: nothing was compared."
+    echo "  The baseline directory has none of the expected files, so every"
+    echo "  check was skipped. Check that the baseline was built or copied."
+    exit 1
+elif [ ${FAIL} -gt 0 ]; then
+    echo "VALIDATION FAILED. Check the details above."
+    exit 1
+else
+    echo "ALL CHECKS PASSED"
+fi
+
+echo ""
+echo "=== Done === $(date)"

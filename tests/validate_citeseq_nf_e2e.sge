@@ -1,0 +1,475 @@
+#!/bin/bash
+#$ -N validate_citeseq_nf_e2e
+#$ -cwd
+#$ -j y
+#$ -o logs/validate_citeseq_nf_e2e_$JOB_ID.log
+# Resource requests are a starting point from one SGE cluster.
+# A new cluster may need other values. Adjust h_rt, h_vmem and the
+# number of smp slots to fit your queue limits and your data size.
+#$ -l h_rt=8:00:00
+#$ -pe smp 8
+#$ -l h_vmem=48G
+
+# End-to-end validation for the generic citeseq-nf pipeline.
+#
+# What it does, in three stages:
+#   1. Build a fresh baseline by running the step08 script directly (no Nextflow).
+#   2. Run the same work through Nextflow.
+#   3. Compare the two results and report PASS/FAIL per check.
+#
+# The default path validates step08 only, through "-entry from_totalvi_scvi".
+# That is the handoff point of the generic pipeline and it is fast. A full
+# default-workflow run retrains totalVI and scVI on GPU and takes hours. Run
+# the full path with RUN_FULL_DEFAULT=1 when something in steps 00 to 07
+# changed.
+#
+# Step 08 is stochastic. Silhouette scores depend on the stochastic totalVI
+# and scVI embeddings and on a random subsample. So we do not compare numbers
+# for equality. We compare invariants:
+#   - Cell and gene counts match exactly
+#   - obsm holds X_totalVI, X_scVI and X_umap, and the full obsm key set
+#     matches the baseline (so X_umap_totalvi is covered too)
+#   - obs columns present (ADT_*_denoised, ADT_*_fg_prob, leiden_totalvi)
+#   - uns['primary_embedding'] present and equal to the baseline choice
+#   - Silhouette scores within 2 percent of the fresh baseline
+#   - embedding_comparison.csv structure intact
+#
+# ---------------------------------------------------------------------------
+# HOW TO SUBMIT
+#
+# Submit from a directory that already has a logs/ subdirectory, because the
+# "#$ -o" line above is relative. The repo root works:
+#     mkdir -p logs
+#     qsub -v PROJECT=...,CONDA_ENV=...,PANEL=...,DATA_ROOT=... \
+#          tests/validate_citeseq_nf_e2e.sge
+#
+# Use "qsub -V" instead if you prefer to pass your whole shell environment.
+#
+# Switches (all optional, all default to 0):
+#   qsub -v SKIP_BASELINE=1     tests/validate_citeseq_nf_e2e.sge   # reuse the saved baseline
+#   qsub -v SKIP_NEXTFLOW=1     tests/validate_citeseq_nf_e2e.sge   # only rebuild the baseline
+#   qsub -v RUN_FULL_DEFAULT=1  tests/validate_citeseq_nf_e2e.sge   # full workflow, slow, retrains on GPU
+#
+# ---------------------------------------------------------------------------
+# VARIABLES YOU MUST SET
+#   PROJECT      Study root. It holds data/, results/, models/, figures/.
+#   CONDA_ENV    Path to the conda env built from env/environment.yml.
+#   PANEL        Path to your ADT panel YAML.
+#   DATA_ROOT    CellRanger input root: one subdirectory per library.
+#                config.py refuses to import without it, so it is needed
+#                even for the step08-only path.
+#
+# VARIABLES YOU MUST SET WHEN RUN_FULL_DEFAULT=1 (GPU steps 06 and 07)
+#   GPU_QUEUE_TOTALVI    e.g. 'gpu.q@some-host'
+#   GPU_QUEUE_SCVI       e.g. 'gpu.q@some-host'
+#
+# OPTIONAL VARIABLES (safe defaults)
+#   SAMPLE_METADATA_JSON  Passed as --sample_metadata_json when set.
+#   FORCED_HVGS_FILE      Passed as --forced_hvgs_file when set.
+#   BIO_SEP_MARKER        Passed as --biological_separation_marker when set.
+#                         When unset, the bio-silhouette comparison is skipped.
+#   N_LIBRARIES           Passed as --n_libraries when set.
+#   NEXTFLOW_MODULE       Default "nextflow/25.10.4".
+#   SCRATCH               Default "${TMPDIR:-/tmp}". Holds the baseline temp dir.
+#   CITESEQ_NF            Path to this citeseq-nf checkout. Only needed if the
+#                         script cannot work it out by itself (see below).
+
+set -euo pipefail
+
+# ── Locate the citeseq-nf repo ────────────────────────────────────
+# This script lives in <repo>/tests/, so the repo is one level up. Under SGE
+# the job script is copied to a spool directory, so $0 may not be the original
+# path. If the derived path has no main.nf, fall back to a caller-set
+# CITESEQ_NF.
+_derived_root="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+if [ -n "${_derived_root}" ] && [ -f "${_derived_root}/main.nf" ]; then
+    CITESEQ_NF="${_derived_root}"
+else
+    CITESEQ_NF="${CITESEQ_NF:-}"
+fi
+if [ -z "${CITESEQ_NF}" ] || [ ! -f "${CITESEQ_NF}/main.nf" ]; then
+    echo "ERROR: cannot find the citeseq-nf repo." >&2
+    echo "  Under SGE this script is copied, so its path is not the repo path." >&2
+    echo "  Set CITESEQ_NF to the checkout that holds main.nf, for example:" >&2
+    echo "    qsub -v CITESEQ_NF=/path/to/citeseq-nf,PROJECT=...,CONDA_ENV=...,PANEL=...,DATA_ROOT=... \\" >&2
+    echo "         tests/validate_citeseq_nf_e2e.sge" >&2
+    exit 1
+fi
+
+# ── Required settings from the caller ─────────────────────────────
+: "${PROJECT:?Set PROJECT to the study root: the directory holding data/, results/, models/, figures/}"
+: "${CONDA_ENV:?Set CONDA_ENV to the conda env built from env/environment.yml}"
+: "${PANEL:?Set PANEL to your ADT panel YAML (see panels/example_panel.yaml)}"
+: "${DATA_ROOT:?Set DATA_ROOT to the CellRanger input root: one subdirectory per library}"
+
+# ── Optional settings with defaults ───────────────────────────────
+NEXTFLOW_MODULE="${NEXTFLOW_MODULE:-nextflow/25.10.4}"
+SCRATCH="${SCRATCH:-${TMPDIR:-/tmp}}"
+SAMPLE_METADATA_JSON="${SAMPLE_METADATA_JSON:-}"
+FORCED_HVGS_FILE="${FORCED_HVGS_FILE:-}"
+BIO_SEP_MARKER="${BIO_SEP_MARKER:-}"
+N_LIBRARIES="${N_LIBRARIES:-}"
+SKIP_BASELINE="${SKIP_BASELINE:-0}"
+SKIP_NEXTFLOW="${SKIP_NEXTFLOW:-0}"
+RUN_FULL_DEFAULT="${RUN_FULL_DEFAULT:-0}"
+
+PYTHON="${CONDA_ENV}/bin/python"
+
+# ── Check the inputs early, with clear messages ───────────────────
+[ -d "${PROJECT}" ]   || { echo "ERROR: PROJECT is not a directory: ${PROJECT}" >&2; exit 1; }
+[ -x "${PYTHON}" ]    || { echo "ERROR: no python in CONDA_ENV: ${PYTHON}" >&2; exit 1; }
+[ -f "${PANEL}" ]     || { echo "ERROR: PANEL file not found: ${PANEL}" >&2; exit 1; }
+[ -d "${DATA_ROOT}" ] || { echo "ERROR: DATA_ROOT is not a directory: ${DATA_ROOT}" >&2; exit 1; }
+if [ -n "${SAMPLE_METADATA_JSON}" ] && [ ! -f "${SAMPLE_METADATA_JSON}" ]; then
+    echo "ERROR: SAMPLE_METADATA_JSON is set but the file is missing: ${SAMPLE_METADATA_JSON}" >&2
+    exit 1
+fi
+if [ -n "${FORCED_HVGS_FILE}" ] && [ ! -f "${FORCED_HVGS_FILE}" ]; then
+    echo "ERROR: FORCED_HVGS_FILE is set but the file is missing: ${FORCED_HVGS_FILE}" >&2
+    exit 1
+fi
+if [ "${RUN_FULL_DEFAULT}" = "1" ]; then
+    : "${GPU_QUEUE_TOTALVI:?RUN_FULL_DEFAULT=1 runs step06 on GPU. Set GPU_QUEUE_TOTALVI, e.g. gpu.q@some-host}"
+    : "${GPU_QUEUE_SCVI:?RUN_FULL_DEFAULT=1 runs step07 on GPU. Set GPU_QUEUE_SCVI, e.g. gpu.q@some-host}"
+fi
+
+# ── Artifact locations ────────────────────────────────────────────
+BASELINE_DIR="${PROJECT}/data/processed/citeseq_nf_baseline"
+BASELINE_H5AD="${BASELINE_DIR}/adata_qc_embedded.h5ad"
+BASELINE_CSV="${BASELINE_DIR}/embedding_comparison.csv"
+NF_H5AD="${PROJECT}/data/processed/adata_qc_embedded.h5ad"
+NF_CSV="${PROJECT}/results/phase2_embedding/embedding_comparison.csv"
+
+# ── Banner: what this job actually used ───────────────────────────
+echo "=== citeseq-nf End-to-End Validation ==="
+echo "Job:        ${JOB_ID:-no-job-id} on $(hostname) at $(date)"
+echo "Repo:       ${CITESEQ_NF}"
+echo "Project:    ${PROJECT}"
+echo "Conda env:  ${CONDA_ENV}"
+echo "Panel:      ${PANEL}"
+echo "Data root:  ${DATA_ROOT}"
+echo "Scratch:    ${SCRATCH}"
+echo "Bio marker: ${BIO_SEP_MARKER:-<unset, bio-silhouette comparison skipped>}"
+echo "Switches:   SKIP_BASELINE=${SKIP_BASELINE} SKIP_NEXTFLOW=${SKIP_NEXTFLOW} RUN_FULL_DEFAULT=${RUN_FULL_DEFAULT}"
+
+# ── Runtime environment ───────────────────────────────────────────
+export LD_LIBRARY_PATH="${CONDA_ENV}/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS="${NSLOTS:-8}"
+export MKL_NUM_THREADS="${NSLOTS:-8}"
+export MALLOC_ARENA_MAX=2
+export MALLOC_TRIM_THRESHOLD_=0
+
+cd "${PROJECT}"
+
+# ── 1. Build a fresh baseline by running step08 directly ──────────
+# The baseline must reflect the CURRENT on-disk inputs (adata_qc_clr,
+# adata_totalvi, adata_scvi). An old baseline has different cell counts and
+# produces failures that mean nothing.
+if [ "${SKIP_BASELINE}" != "1" ]; then
+    echo ""
+    echo "=== Building a fresh baseline by running step08 directly === $(date)"
+
+    mkdir -p "${BASELINE_DIR}"
+    mkdir -p "${SCRATCH}"
+
+    # Run in a temp directory so the direct run does not overwrite the live
+    # adata_qc_embedded.h5ad or the live results/.
+    BASELINE_SCRATCH="$(mktemp -d -p "${SCRATCH}" citeseq_nf_baseline.XXXXXX)"
+    echo "Baseline work dir: ${BASELINE_SCRATCH}"
+
+    # Link the current on-disk inputs into the temp processed dir.
+    for _name in adata_qc_clr adata_totalvi adata_scvi; do
+        _src="${PROJECT}/data/processed/${_name}.h5ad"
+        if [ ! -f "${_src}" ]; then
+            echo "ERROR: baseline input missing: ${_src}" >&2
+            echo "  Run steps 03, 06 and 07 first, or set SKIP_BASELINE=1 to reuse a saved baseline." >&2
+            exit 1
+        fi
+        ln -s "${_src}" "${BASELINE_SCRATCH}/${_name}.h5ad"
+    done
+    mkdir -p "${BASELINE_SCRATCH}/results/phase2_embedding"
+    mkdir -p "${BASELINE_SCRATCH}/figures"
+    mkdir -p "${BASELINE_SCRATCH}/models"
+
+    # The direct run gets no beforeScript from Nextflow, so every CITESEQ_*
+    # variable that scripts/config.py reads must be set here. config.py raises
+    # a RuntimeError at import time when CITESEQ_PROJECT_ROOT, CITESEQ_DATA_ROOT
+    # or CITESEQ_PANEL_YAML is missing.
+    BASELINE_ENV=(
+        "CITESEQ_PROJECT_ROOT=${PROJECT}"
+        "CITESEQ_DATA_ROOT=${DATA_ROOT}"
+        "CITESEQ_PANEL_YAML=${PANEL}"
+        "CITESEQ_PYTHON_BIN=${PYTHON}"
+        "CITESEQ_PROCESSED_DIR=${BASELINE_SCRATCH}"
+        "CITESEQ_RESULTS_DIR=${BASELINE_SCRATCH}/results"
+        "CITESEQ_FIGURES_DIR=${BASELINE_SCRATCH}/figures"
+        "CITESEQ_MODELS_DIR=${BASELINE_SCRATCH}/models"
+    )
+    if [ -n "${SAMPLE_METADATA_JSON}" ]; then
+        BASELINE_ENV+=("CITESEQ_SAMPLE_METADATA_JSON=${SAMPLE_METADATA_JSON}")
+    fi
+    if [ -n "${FORCED_HVGS_FILE}" ]; then
+        BASELINE_ENV+=("CITESEQ_FORCED_HVGS_FILE=${FORCED_HVGS_FILE}")
+    fi
+    # The marker must match the Nextflow run, otherwise the two CSVs get
+    # different metric row names and every comparison fails.
+    if [ -n "${BIO_SEP_MARKER}" ]; then
+        BASELINE_ENV+=("CITESEQ_BIOLOGICAL_SEPARATION_MARKER=${BIO_SEP_MARKER}")
+    fi
+
+    env "${BASELINE_ENV[@]}" \
+        "${PYTHON}" "${CITESEQ_NF}/scripts/python/step08_embedding_comparison.py"
+
+    # Copy the baseline artifacts out of the temp directory.
+    cp -f "${BASELINE_SCRATCH}/adata_qc_embedded.h5ad" "${BASELINE_H5AD}"
+    cp -f "${BASELINE_SCRATCH}/results/phase2_embedding/embedding_comparison.csv" "${BASELINE_CSV}"
+
+    echo "Baseline saved:"
+    ls -lh "${BASELINE_H5AD}" "${BASELINE_CSV}"
+
+    rm -rf "${BASELINE_SCRATCH}"
+else
+    echo "SKIP_BASELINE=1: reusing the saved baseline in ${BASELINE_DIR}/"
+    if [ ! -f "${BASELINE_H5AD}" ] || [ ! -f "${BASELINE_CSV}" ]; then
+        echo "ERROR: no baseline found under ${BASELINE_DIR}/. Run once without SKIP_BASELINE first." >&2
+        exit 1
+    fi
+fi
+
+# ── 2. Run the pipeline through Nextflow ──────────────────────────
+if [ "${SKIP_NEXTFLOW}" != "1" ]; then
+    echo ""
+    echo "=== Running the Nextflow pipeline === $(date)"
+
+    # Find nextflow. Use it if it is already on PATH. Otherwise try the module
+    # system, which differs from cluster to cluster, so every step is guarded.
+    if ! command -v nextflow >/dev/null 2>&1; then
+        for _modinit in /etc/profile.d/modules.sh /usr/share/Modules/init/bash; do
+            if [ -f "${_modinit}" ]; then
+                set +u
+                # shellcheck disable=SC1090
+                . "${_modinit}" || true
+                set -u
+                break
+            fi
+        done
+        if command -v module >/dev/null 2>&1; then
+            set +u
+            module load "${NEXTFLOW_MODULE}" || true
+            set -u
+        fi
+    fi
+    if ! command -v nextflow >/dev/null 2>&1; then
+        echo "ERROR: nextflow not found." >&2
+        echo "  Put nextflow on your PATH, or set NEXTFLOW_MODULE to the module name" >&2
+        echo "  your cluster uses (tried: ${NEXTFLOW_MODULE})." >&2
+        exit 1
+    fi
+    echo "Nextflow: $(command -v nextflow)"
+
+    # Always go through the repo's own wrapper. It keeps the .nextflow.log
+    # files out of the working tree.
+    NF_CMD=(
+        "${CITESEQ_NF}/run.sh" run "${CITESEQ_NF}/main.nf"
+        -profile sge
+        -resume
+        -ansi-log false
+    )
+
+    if [ "${RUN_FULL_DEFAULT}" = "1" ]; then
+        echo "Running the FULL default workflow (Phase A then Phase B). This retrains totalVI and scVI."
+        NF_CMD+=(--sge_gpu_totalvi_queue "${GPU_QUEUE_TOTALVI}")
+        NF_CMD+=(--sge_gpu_scvi_queue    "${GPU_QUEUE_SCVI}")
+    else
+        echo "Running -entry from_totalvi_scvi (step08 smoke test)"
+        NF_CMD+=(-entry from_totalvi_scvi)
+    fi
+
+    # Study parameters. --panel is required by the pipeline.
+    NF_CMD+=(
+        --project_root "${PROJECT}"
+        --outdir       "${PROJECT}"
+        --conda_env    "${CONDA_ENV}"
+        --panel        "${PANEL}"
+        --data_root    "${DATA_ROOT}"
+    )
+    if [ -n "${SAMPLE_METADATA_JSON}" ]; then
+        NF_CMD+=(--sample_metadata_json "${SAMPLE_METADATA_JSON}")
+    fi
+    if [ -n "${FORCED_HVGS_FILE}" ]; then
+        NF_CMD+=(--forced_hvgs_file "${FORCED_HVGS_FILE}")
+    fi
+    if [ -n "${BIO_SEP_MARKER}" ]; then
+        NF_CMD+=(--biological_separation_marker "${BIO_SEP_MARKER}")
+    fi
+    if [ -n "${N_LIBRARIES}" ]; then
+        NF_CMD+=(--n_libraries "${N_LIBRARIES}")
+    fi
+
+    echo "Command: ${NF_CMD[*]}"
+
+    # Capture the exit code instead of letting "set -e" kill the job silently.
+    set +e
+    "${NF_CMD[@]}" 2>&1
+    NF_STATUS=$?
+    set -e
+    echo "Nextflow exit code: ${NF_STATUS}"
+    if [ "${NF_STATUS}" -ne 0 ]; then
+        echo "ERROR: Nextflow failed. Not comparing outputs." >&2
+        exit "${NF_STATUS}"
+    fi
+    echo "Nextflow finished at $(date)"
+else
+    echo "SKIP_NEXTFLOW=1: not running Nextflow, comparing the existing outputs."
+fi
+
+# ── 3. Invariant validation ───────────────────────────────────────
+echo ""
+echo "=== Invariant Validation === $(date)"
+
+"${PYTHON}" - "${BASELINE_H5AD}" "${BASELINE_CSV}" "${NF_H5AD}" "${NF_CSV}" "${BIO_SEP_MARKER}" <<'PYEOF'
+import anndata as ad
+import pandas as pd
+import sys
+import os
+
+baseline_h5ad, baseline_csv, nf_h5ad, nf_csv, bio_marker = sys.argv[1:6]
+
+PASS = 0
+FAIL = 0
+
+def check(name, condition, detail):
+    global PASS, FAIL
+    if condition:
+        print(f"  PASS: {name} | {detail}")
+        PASS += 1
+    else:
+        print(f"  FAIL: {name} | {detail}")
+        FAIL += 1
+
+print("\n--- Artifact existence ---")
+check("baseline h5ad exists", os.path.exists(baseline_h5ad), baseline_h5ad)
+check("baseline csv exists",  os.path.exists(baseline_csv),  baseline_csv)
+check("nextflow h5ad exists", os.path.exists(nf_h5ad),       nf_h5ad)
+check("nextflow csv exists",  os.path.exists(nf_csv),        nf_csv)
+
+if not all(os.path.exists(p) for p in [baseline_h5ad, baseline_csv, nf_h5ad, nf_csv]):
+    print("\nCannot continue without all four artifacts.")
+    sys.exit(1)
+
+print("\n--- adata_qc_embedded.h5ad shape and keys ---")
+bl = ad.read_h5ad(baseline_h5ad)
+nf = ad.read_h5ad(nf_h5ad)
+
+check("cell count exact match",
+      bl.n_obs == nf.n_obs,
+      f"baseline={bl.n_obs} nextflow={nf.n_obs}")
+check("gene count exact match",
+      bl.n_vars == nf.n_vars,
+      f"baseline={bl.n_vars} nextflow={nf.n_vars}")
+
+required_obsm = {"X_totalVI", "X_scVI", "X_umap"}
+bl_obsm = set(bl.obsm.keys())
+nf_obsm = set(nf.obsm.keys())
+check("obsm contains required embeddings",
+      required_obsm.issubset(nf_obsm),
+      f"nextflow obsm={sorted(nf_obsm)}")
+check("obsm keys match baseline",
+      bl_obsm == nf_obsm,
+      f"baseline-only={sorted(bl_obsm - nf_obsm)} nextflow-only={sorted(nf_obsm - bl_obsm)}")
+
+# ADT_*_denoised and ADT_*_fg_prob columns are merged from totalVI into the
+# embedded h5ad. Downstream gating steps read them.
+bl_adt_cols = {c for c in bl.obs.columns
+               if c.startswith("ADT_") and (c.endswith("_denoised") or c.endswith("_fg_prob"))}
+nf_adt_cols = {c for c in nf.obs.columns
+               if c.startswith("ADT_") and (c.endswith("_denoised") or c.endswith("_fg_prob"))}
+check("ADT _denoised/_fg_prob obs columns present",
+      len(nf_adt_cols) > 0,
+      f"nextflow has {len(nf_adt_cols)} ADT columns")
+check("ADT obs columns match baseline count",
+      len(bl_adt_cols) == len(nf_adt_cols),
+      f"baseline={len(bl_adt_cols)} nextflow={len(nf_adt_cols)}")
+
+check("leiden_totalvi present",
+      "leiden_totalvi" in nf.obs.columns,
+      f"obs cols: {list(nf.obs.columns)[:10]}...")
+
+check("uns['primary_embedding'] present",
+      "primary_embedding" in nf.uns,
+      f"uns keys: {list(nf.uns.keys())}")
+
+if "primary_embedding" in nf.uns and "primary_embedding" in bl.uns:
+    check("primary_embedding choice matches baseline",
+          nf.uns["primary_embedding"] == bl.uns["primary_embedding"],
+          f"baseline={bl.uns['primary_embedding']} nextflow={nf.uns['primary_embedding']}")
+
+del bl, nf
+
+print("\n--- embedding_comparison.csv silhouette invariants (2 percent tolerance) ---")
+bl_comp = pd.read_csv(baseline_csv)
+nf_comp = pd.read_csv(nf_csv)
+
+check("comparison CSV schema matches",
+      list(bl_comp.columns) == list(nf_comp.columns) and list(bl_comp["metric"]) == list(nf_comp["metric"]),
+      f"cols baseline={list(bl_comp.columns)} nextflow={list(nf_comp.columns)}")
+
+def silhouette_value(df, metric, col):
+    """Return the numeric silhouette, or None when the cell is not a number."""
+    rows = df.loc[df["metric"] == metric]
+    if rows.empty:
+        return None
+    try:
+        return float(rows[col].values[0])
+    except (ValueError, TypeError):
+        return None
+
+def pct_diff(bl_val, nf_val):
+    if bl_val == 0:
+        return abs(nf_val - bl_val) * 100.0
+    return abs(nf_val - bl_val) / abs(bl_val) * 100.0
+
+# The bio-silhouette row name carries the marker name in its original case,
+# for example "bio_silhouette_CD4". Build it from the marker the run used.
+# With no marker, step08 writes a "bio_silhouette_skipped" row with no numbers,
+# so there is nothing to compare.
+metrics = ["batch_silhouette"]
+if bio_marker:
+    metrics.append(f"bio_silhouette_{bio_marker}")
+else:
+    print("  INFO: no biological separation marker set, so the bio-silhouette "
+          "comparison is skipped. Set BIO_SEP_MARKER to enable it.")
+
+for metric in metrics:
+    for col in ("totalvi", "scvi"):
+        bl_v = silhouette_value(bl_comp, metric, col)
+        nf_v = silhouette_value(nf_comp, metric, col)
+        if bl_v is None or nf_v is None:
+            check(f"{metric}/{col} numeric", False,
+                  f"baseline={bl_v} nextflow={nf_v}")
+            continue
+        diff = pct_diff(bl_v, nf_v)
+        check(f"{metric}/{col} within 2%",
+              diff <= 2.0,
+              f"baseline={bl_v:.4f} nextflow={nf_v:.4f} diff={diff:.2f}%")
+
+# Decision row: both runs should pick the same primary embedding.
+bl_decision = bl_comp.loc[bl_comp["metric"] == "decision", "totalvi"]
+nf_decision = nf_comp.loc[nf_comp["metric"] == "decision", "totalvi"]
+if len(bl_decision) and len(nf_decision):
+    check("decision row primary_embedding matches",
+          str(bl_decision.values[0]) == str(nf_decision.values[0]),
+          f"baseline={bl_decision.values[0]!r} nextflow={nf_decision.values[0]!r}")
+
+# ── Summary ─────────────────────────────────────────────────────
+print(f"\n{'='*60}")
+print(f"Summary: {PASS} PASS, {FAIL} FAIL")
+if FAIL > 0:
+    print("VALIDATION FAILED. Check the details above.")
+    sys.exit(1)
+else:
+    print("ALL INVARIANT CHECKS PASSED")
+PYEOF
+
+echo ""
+echo "=== Done === $(date)"
