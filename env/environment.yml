@@ -1,0 +1,105 @@
+# Conda / mamba environment for the citeseq-nf pipeline.
+#
+# Build it:
+#   micromamba create -f env/environment.yml     # or: mamba env create -f env/environment.yml
+#   micromamba activate citeseq-nf
+#
+# Then add the R package that conda cannot supply (ThresholdR):
+#   Rscript env/r_extra.R
+#
+# Pass the resulting environment path to the pipeline:
+#   nextflow run ./main.nf --conda_env /path/to/envs/citeseq-nf ...
+#
+# There is deliberately no "prefix:" line. conda / mamba / micromamba place the
+# environment in your own envs directory.
+#
+# Platform this was pinned on: linux-64, Python 3.10, R 4.4.
+# Most conda pins below were read from a working installation. Six R and
+# Bioconductor lines carry the word "mapped" in their comment. Those packages
+# were installed outside conda there (through BiocManager or remotes), so conda
+# recorded no version for them. Their pin is the closest matching bioconda
+# build, not a version conda itself reported.
+# The whole file resolves with `micromamba create --dry-run -f env/environment.yml`.
+
+name: citeseq-nf
+
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+
+dependencies:
+  # ── Interpreters ───────────────────────────────────────────────────────
+  - python=3.10.19
+  - pip=26.0.1
+  - r-base=4.4.3
+
+  # ── Python: numeric / IO core ──────────────────────────────────────────
+  - numpy=2.2.6
+  - pandas=2.3.3
+  - scipy=1.15.2                 # scipy.signal.find_peaks, scipy.stats.gaussian_kde
+  - scikit-learn=1.7.2           # GaussianMixture, silhouette_score
+  - statsmodels=0.14.6           # required by soupx-python
+  - numba=0.63.1                 # JIT backend for scanpy / umap-learn
+  - h5py=3.15.1                  # direct .h5 / .h5ad access
+  - hdf5=1.14.6
+  - pyyaml=6.0.3                 # scripts/config.py reads YAML panel files
+  - natsort=8.4.0
+  - tqdm=4.67.3
+
+  # ── Python: single-cell stack ──────────────────────────────────────────
+  # scanpy 1.11 ships Scrublet internally as sc.pp.scrublet, so there is
+  # intentionally NO standalone "scrublet" package here.
+  - anndata=0.11.4
+  - scanpy=1.11.5
+  - leidenalg=0.11.0             # sc.tl.leiden
+  - python-igraph=1.0.0          # graph backend for leidenalg
+  - umap-learn=0.5.11            # sc.tl.umap
+  - pynndescent=0.5.13           # nearest-neighbour backend for umap-learn
+  - session-info2=0.3            # scanpy version reporting
+
+  # ── Python: plotting ───────────────────────────────────────────────────
+  - matplotlib-base=3.10.8
+  - seaborn-base=0.13.2
+
+  # ── Python ↔ R bridge ──────────────────────────────────────────────────
+  # Not imported by the step scripts today; kept because the pipeline mixes
+  # Python and R steps and rpy2 was part of the validated environment.
+  - rpy2=3.6.6
+
+  # ── R: base utilities used by scripts/config.R and the step scripts ────
+  - r-matrix=1.7_4               # library(Matrix)
+  - r-ggplot2=4.0.2              # library(ggplot2); also a ThresholdR import
+  - r-jsonlite=2.0.0             # scripts/config.R
+  - r-yaml=2.3.12                # scripts/config.R
+  - r-magrittr=2.0.4             # dsb import
+  - r-remotes=2.5.0              # needed by env/r_extra.R
+  - r-seurat=5.4.0               # env/r_extra.R checks that Seurat loads
+
+  # ── R: CITE-seq / single-cell packages ─────────────────────────────────
+  # ThresholdR (step 05a) has no conda package at all, so env/r_extra.R
+  # installs it. That script also re-checks the packages below and tops up
+  # rhdf5, celda and decontx to their exact recorded patch versions: 2.50.2,
+  # 1.22.1 and 1.4.1. It also adds Rhdf5lib and rhdf5filters, which are not
+  # pinned here at all.
+  - r-dsb=2.0.1                  # mapped. step02: ADT denoising
+  - r-mclust=6.1.2               # dsb + ThresholdR import
+  - r-mixtools=2.0.0.1           # mapped. ThresholdR import
+  - r-foreach=1.5.2              # mapped. ThresholdR import
+  - bioconductor-limma=3.62.1    # dsb import
+  - bioconductor-rhdf5=2.50.0    # mapped. step00c / step01b: read 10x .h5 matrices
+  - bioconductor-singlecellexperiment=1.28.0
+  - bioconductor-scdblfinder=1.23.4   # step01b: doublet calling
+  - bioconductor-decontx=1.4.0        # mapped. step00c: ambient RNA removal
+  - bioconductor-celda=1.22.0         # mapped. parent project of DecontX
+
+  # ── Python packages that only exist on PyPI ────────────────────────────
+  - pip:
+      # torch is pinned below 2.6 so that the lightning version scvi-tools
+      # pulls in keeps working. On linux-64 this wheel is the CUDA 12.4 build.
+      - torch==2.5.1
+      - scvi-tools==1.3.3        # step06 totalVI, step07 scVI
+      - mudata==0.3.3            # scvi-tools data container
+      - soupx-python==0.3.0      # step00b ambient RNA removal
+      - scikit-misc==0.5.2       # sc.pp.highly_variable_genes(flavor="seurat_v3")
+      - scikit-image==0.25.2     # threshold search inside sc.pp.scrublet

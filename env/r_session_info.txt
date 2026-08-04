@@ -1,0 +1,542 @@
+==========================================================================
+citeseq-nf - R environment provenance record
+==========================================================================
+
+This is a snapshot of the R installation the pipeline was developed and
+last run on. It is a record, not a spec: to rebuild the environment use
+env/r_extra.R together with the conda environment file. Absolute paths,
+user names and host names have been removed; '<env>' stands for the
+environment prefix.
+
+R version:            4.4.3 (2025-02-28)
+Bioconductor release: 3.20  (BiocVersion 3.20.0, BiocManager 1.30.27)
+Platform:             x86_64-conda-linux-gnu
+Captured:             2026-08-04
+
+Source column in the package table below:
+  conda    - the package came from the conda environment (conda-forge /
+             bioconda channels), so the conda environment file pins it.
+  manual   - the package was added into the conda env afterwards with
+             BiocManager::install() / install.packages() / remotes. These
+             are the ones env/r_extra.R reinstalls.
+  vendored - not on CRAN or Bioconductor; a source copy is kept in this
+             repo under env/vendor/.
+  base R   - ships with R itself (base or recommended priority).
+
+--------------------------------------------------------------------------
+1. Packages the pipeline's R scripts load directly
+--------------------------------------------------------------------------
+
+  script                          packages loaded
+  scripts/R/step00c_decontx.R     decontX, Matrix, rhdf5, Seurat
+  scripts/R/step01b_scdblfinder.R rhdf5, Matrix, SingleCellExperiment,
+                                  scDblFinder
+  scripts/R/step02_dsb_normalization.R  dsb, Matrix, Seurat
+  scripts/R/step05a_thresholdr_gating.R ThresholdR, ggplot2
+
+  package                  version      source
+  decontX                  1.4.1        manual
+  dsb                      2.0.1        manual
+  ggplot2                  4.0.2        conda
+  Matrix                   1.7-4        base R
+  rhdf5                    2.50.2       manual
+  scDblFinder              1.23.4       conda
+  Seurat                   5.4.0        conda
+  SingleCellExperiment     1.28.0       conda
+  ThresholdR               0.1.0        vendored
+
+Pulled in as a hard dependency of the above (needed at run time even
+though no script names them). ThresholdR calls require(mixtools),
+require(mclust), require(foreach) and require(ggplot2) from inside its
+functions, so they are not visible in the sessionInfo attach list but
+the pipeline fails without them. decontX imports celda.
+
+  package                  version      source
+  celda                    1.22.1       manual
+  foreach                  1.5.2        manual
+  mclust                   6.1.2        conda
+  mixtools                 2.0.0.1      manual
+  SeuratObject             5.3.0        conda
+  Rhdf5lib                 1.28.0       manual
+  rhdf5filters             1.18.1       manual
+
+--------------------------------------------------------------------------
+2. sessionInfo() with all pipeline packages loaded
+--------------------------------------------------------------------------
+
+R version 4.4.3 (2025-02-28)
+Platform: x86_64-conda-linux-gnu
+Running under: Red Hat Enterprise Linux 8.10 (Ootpa)
+
+Matrix products: default
+BLAS/LAPACK: <env>/libopenblasp-r0.3.30.so;  LAPACK version 3.12.0
+
+locale:
+ [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              
+ [3] LC_TIME=en_US.UTF-8        LC_COLLATE=en_US.UTF-8    
+ [5] LC_MONETARY=en_US.UTF-8    LC_MESSAGES=en_US.UTF-8   
+ [7] LC_PAPER=en_US.UTF-8       LC_NAME=C                 
+ [9] LC_ADDRESS=C               LC_TELEPHONE=C            
+[11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       
+
+time zone: America/New_York
+tzcode source: system (glibc)
+
+attached base packages:
+[1] stats4    stats     graphics  grDevices utils     datasets  methods  
+[8] base     
+
+other attached packages:
+ [1] ggplot2_4.0.2               ThresholdR_0.1.0           
+ [3] Seurat_5.4.0                SeuratObject_5.3.0         
+ [5] sp_2.2-1                    dsb_2.0.1                  
+ [7] decontX_1.4.1               scDblFinder_1.23.4         
+ [9] SingleCellExperiment_1.28.0 SummarizedExperiment_1.36.0
+[11] Biobase_2.66.0              GenomicRanges_1.58.0       
+[13] GenomeInfoDb_1.42.0         IRanges_2.40.0             
+[15] S4Vectors_0.44.0            BiocGenerics_0.52.0        
+[17] MatrixGenerics_1.18.0       matrixStats_1.5.0          
+[19] rhdf5_2.50.2                Matrix_1.7-4               
+
+loaded via a namespace (and not attached):
+  [1] RcppAnnoy_0.0.23         splines_4.4.3            later_1.4.8             
+  [4] BiocIO_1.16.0            bitops_1.0-9             tibble_3.3.1            
+  [7] polyclip_1.10-7          XML_3.99-0.23            fastDummies_1.7.5       
+ [10] lifecycle_1.0.5          edgeR_4.4.0              StanHeaders_2.32.10     
+ [13] globals_0.19.1           lattice_0.22-9           MASS_7.3-65             
+ [16] magrittr_2.0.4           limma_3.62.1             plotly_4.12.0           
+ [19] yaml_2.3.12              metapod_1.14.0           httpuv_1.6.17           
+ [22] otel_0.2.0               sctransform_0.4.3        spam_2.11-3             
+ [25] spatstat.sparse_3.1-0    pkgbuild_1.4.8           reticulate_1.45.0       
+ [28] cowplot_1.2.0            pbapply_1.7-4            RColorBrewer_1.1-3      
+ [31] abind_1.4-8              zlibbioc_1.52.0          Rtsne_0.17              
+ [34] purrr_1.2.1              RCurl_1.98-1.18          GenomeInfoDbData_1.2.13 
+ [37] ggrepel_0.9.8            inline_0.3.21            irlba_2.3.7             
+ [40] spatstat.utils_3.2-2     listenv_0.10.1           goftest_1.2-3           
+ [43] RSpectra_0.16-2          spatstat.random_3.4-5    dqrng_0.3.2             
+ [46] fitdistrplus_1.2-6       parallelly_1.46.1        codetools_0.2-20        
+ [49] DelayedArray_0.32.0      scuttle_1.16.0           tidyselect_1.2.1        
+ [52] UCSC.utils_1.2.0         farver_2.1.2             ScaledMatrix_1.14.0     
+ [55] viridis_0.6.5            spatstat.explore_3.8-0   GenomicAlignments_1.42.0
+ [58] jsonlite_2.0.0           BiocNeighbors_2.0.0      progressr_0.19.0        
+ [61] ggridges_0.5.7           survival_3.8-6           scater_1.34.1           
+ [64] tools_4.4.3              ica_1.0-3                Rcpp_1.1.1              
+ [67] glue_1.8.0               gridExtra_2.3            SparseArray_1.6.0       
+ [70] dplyr_1.2.0              loo_2.9.0                withr_3.0.2             
+ [73] combinat_0.0-8           fastmap_1.2.0            rhdf5filters_1.18.1     
+ [76] MCMCprecision_0.4.2      bluster_1.16.0           digest_0.6.39           
+ [79] rsvd_1.0.5               R6_2.6.1                 mime_0.13               
+ [82] scattermore_1.2          tensor_1.5.1             spatstat.data_3.1-9     
+ [85] tidyr_1.3.2              generics_0.1.4           data.table_1.17.8       
+ [88] rtracklayer_1.66.0       htmlwidgets_1.6.4        httr_1.4.8              
+ [91] S4Arrays_1.6.0           uwot_0.2.4               pkgconfig_2.0.3         
+ [94] gtable_0.3.6             lmtest_0.9-40            S7_0.2.1                
+ [97] XVector_0.46.0           htmltools_0.5.9          dotCall64_1.2           
+[100] scales_1.4.0             png_0.1-9                spatstat.univar_3.1-7   
+[103] scran_1.34.0             reshape2_1.4.5           rjson_0.2.23            
+[106] nlme_3.1-169             curl_7.0.0               zoo_1.8-15              
+[109] stringr_1.6.0            KernSmooth_2.23-26       parallel_4.4.3          
+[112] miniUI_0.1.2             vipor_0.4.7              restfulr_0.0.16         
+[115] pillar_1.11.1            grid_4.4.3               vctrs_0.7.2             
+[118] RANN_2.6.2               promises_1.5.0           BiocSingular_1.22.0     
+[121] beachmat_2.22.0          xtable_1.8-8             cluster_2.1.8.2         
+[124] beeswarm_0.4.0           cli_3.6.5                locfit_1.5-9.12         
+[127] compiler_4.4.3           Rsamtools_2.22.0         rlang_1.1.7             
+[130] crayon_1.5.3             rstantools_2.6.0         future.apply_1.20.2     
+[133] mclust_6.1.2             plyr_1.8.9               ggbeeswarm_0.7.3        
+[136] stringi_1.8.7            rstan_2.32.7             deldir_2.0-4            
+[139] viridisLite_0.4.3        QuickJSR_1.9.0           BiocParallel_1.40.0     
+[142] Biostrings_2.74.0        lazyeval_0.2.2           spatstat.geom_3.7-3     
+[145] RcppHNSW_0.6.0           patchwork_1.3.2          future_1.70.0           
+[148] Rhdf5lib_1.28.0          statmod_1.5.1            shiny_1.13.0            
+[151] ROCR_1.0-12              igraph_2.1.4             RcppParallel_5.1.11-2   
+[154] xgboost_3.2.0.1         
+
+--------------------------------------------------------------------------
+3. Every installed package in the environment (381 packages)
+--------------------------------------------------------------------------
+
+  package                        version          source
+  ------------------------------ ---------------- --------
+  abind                          1.4-8            conda
+  AdaptGauss                     1.6              manual
+  aod                            1.3.3            manual
+  ash                            1.0-15           manual
+  askpass                        1.2.1            conda
+  assertthat                     0.2.1            conda
+  assorthead                     1.0.0            conda
+  babelgene                      22.9             manual
+  backports                      1.5.0            conda
+  base                           4.4.3            base R
+  base64enc                      0.1-6            conda
+  basilisk                       1.18.0           manual
+  basilisk.utils                 1.18.0           manual
+  beachmat                       2.22.0           conda
+  beeswarm                       0.4.0            conda
+  BH                             1.87.0-1         conda
+  Biobase                        2.66.0           conda
+  BiocGenerics                   0.52.0           conda
+  BiocIO                         1.16.0           conda
+  BiocManager                    1.30.27          manual
+  BiocNeighbors                  2.0.0            conda
+  BiocParallel                   1.40.0           conda
+  BiocSingular                   1.22.0           conda
+  BiocVersion                    3.20.0           manual
+  Biostrings                     2.74.0           conda
+  bit                            4.6.0            conda
+  bit64                          4.6.0-1          conda
+  bitops                         1.0-9            conda
+  blme                           1.0-7            manual
+  bluster                        1.16.0           conda
+  boot                           1.3-32           base R
+  broom                          1.0.12           manual
+  bslib                          0.10.0           conda
+  cachem                         1.1.0            conda
+  Cairo                          1.7-0            conda
+  callr                          3.7.6            conda
+  car                            3.1-5            manual
+  carData                        3.0-6            manual
+  caTools                        1.18.3           conda
+  CDFt                           1.2              manual
+  celda                          1.22.1           manual
+  checkmate                      2.3.3            conda
+  circlize                       0.4.17           manual
+  cli                            3.6.5            conda
+  clue                           0.3-68           manual
+  cluster                        2.1.8.2          base R
+  coda                           0.19-4.1         manual
+  codetools                      0.2-20           base R
+  colorspace                     2.1-2            conda
+  combinat                       0.0-8            manual
+  commonmark                     2.0.0            conda
+  compiler                       4.4.3            base R
+  ComplexHeatmap                 2.22.0           manual
+  corpcor                        1.6.10           manual
+  corrplot                       0.95             manual
+  cowplot                        1.2.0            conda
+  cpp11                          0.5.3            conda
+  crayon                         1.5.3            conda
+  crosstalk                      1.2.2            conda
+  curl                           7.0.0            conda
+  cytolib                        2.18.2           manual
+  data.table                     1.17.8           conda
+  datasets                       4.4.3            base R
+  dbscan                         1.2.4            manual
+  decontX                        1.4.1            manual
+  DelayedArray                   0.32.0           conda
+  DelayedMatrixStats             1.28.1           manual
+  deldir                         2.0-4            conda
+  dendextend                     1.19.1           manual
+  DEoptimR                       1.1-4            manual
+  Deriv                          4.2.0            manual
+  desc                           1.4.3            conda
+  DESeq2                         1.46.0           manual
+  deSolve                        1.42             manual
+  digest                         0.6.39           conda
+  dir.expiry                     1.14.0           manual
+  distributional                 0.7.0            conda
+  doBy                           4.7.1            manual
+  doParallel                     1.0.17           manual
+  dotCall64                      1.2              conda
+  dplyr                          1.2.0            conda
+  dqrng                          0.3.2            conda
+  DropletUtils                   1.26.0           manual
+  dsb                            2.0.1            manual
+  DT                             0.34.0           manual
+  edgeR                          4.4.0            conda
+  ellipsis                       0.3.2            conda
+  emdist                         0.3-3            manual
+  EMDomics                       2.36.0           manual
+  enrichR                        3.4              manual
+  EnvStats                       3.1.0            manual
+  evaluate                       1.0.5            conda
+  fANCOVA                        0.6-1            manual
+  fansi                          1.0.7            conda
+  farver                         2.1.2            conda
+  fastDummies                    1.7.5            conda
+  fastmap                        1.2.0            conda
+  fastmatch                      1.1-8            manual
+  fda                            6.3.0            manual
+  fds                            1.8              manual
+  fgsea                          1.32.4           manual
+  filelock                       1.0.3            manual
+  fitdistrplus                   1.2-6            conda
+  flowCore                       2.18.0           manual
+  flowViz                        1.70.0           manual
+  FNN                            1.1.4.1          conda
+  fontawesome                    0.5.3            conda
+  foreach                        1.5.2            manual
+  forecast                       9.0.2            manual
+  formatR                        1.14             conda
+  Formula                        1.2-5            manual
+  fracdiff                       1.5-3            manual
+  fs                             1.6.7            conda
+  futile.logger                  1.4.9            conda
+  futile.options                 1.0.1            conda
+  future                         1.70.0           conda
+  future.apply                   1.20.2           conda
+  gbRd                           0.4.12           conda
+  generics                       0.1.4            conda
+  GenomeInfoDb                   1.42.0           conda
+  GenomeInfoDbData               1.2.13           conda
+  GenomicAlignments              1.42.0           conda
+  GenomicRanges                  1.58.0           conda
+  GetoptLong                     1.1.0            manual
+  ggbeeswarm                     0.7.3            conda
+  ggdendro                       0.2.0            manual
+  ggplot2                        4.0.2            conda
+  ggpubr                         0.6.3            manual
+  ggrastr                        1.0.2            conda
+  ggrepel                        0.9.8            conda
+  ggridges                       0.5.7            conda
+  ggsci                          4.2.0            manual
+  ggsignif                       0.6.4            manual
+  glmmTMB                        1.1.14           manual
+  GlobalOptions                  0.1.3            manual
+  globals                        0.19.1           conda
+  glue                           1.8.0            conda
+  goftest                        1.2-3            conda
+  gplots                         3.3.0            conda
+  graph                          1.84.1           manual
+  graphics                       4.4.3            base R
+  grDevices                      4.4.3            base R
+  grid                           4.4.3            base R
+  gridExtra                      2.3              conda
+  gtable                         0.3.6            conda
+  gtools                         3.9.5            conda
+  HDF5Array                      1.34.0           manual
+  hdf5r                          1.3.12           conda
+  hdrcde                         3.5.0            manual
+  here                           1.0.2            conda
+  hexbin                         1.28.5           conda
+  highr                          0.12             conda
+  hms                            1.1.4            manual
+  htmltools                      0.5.9            conda
+  htmlwidgets                    1.6.4            conda
+  httpuv                         1.6.17           conda
+  httr                           1.4.8            conda
+  ica                            1.0-3            conda
+  IDPmisc                        1.1.21           manual
+  igraph                         2.1.4            conda
+  inline                         0.3.21           conda
+  interp                         1.1-6            manual
+  IRanges                        2.40.0           conda
+  irlba                          2.3.7            conda
+  isoband                        0.3.0            conda
+  iterators                      1.0.14           manual
+  jpeg                           0.1-11           manual
+  jquerylib                      0.1.4            conda
+  jsonlite                       2.0.0            conda
+  JuliaCall                      0.17.6           manual
+  kernlab                        0.9-33           conda
+  KernSmooth                     2.23-26          base R
+  knitr                          1.51             conda
+  ks                             1.15.1           manual
+  labeling                       0.4.3            conda
+  lambda.r                       1.2.4            conda
+  later                          1.4.8            conda
+  lattice                        0.22-9           base R
+  latticeExtra                   0.6-31           manual
+  lazyeval                       0.2.2            conda
+  leidenbase                     0.1.36           conda
+  lifecycle                      1.0.5            conda
+  limma                          3.62.1           conda
+  listenv                        0.10.1           conda
+  lme4                           1.1-38           conda
+  lmerTest                       3.2-1            manual
+  lmtest                         0.9-40           conda
+  locfit                         1.5-9.12         conda
+  loo                            2.9.0            conda
+  magrittr                       2.0.4            conda
+  MASS                           7.3-65           base R
+  Matrix                         1.7-4            base R
+  MatrixGenerics                 1.18.0           conda
+  MatrixModels                   0.5-4            manual
+  matrixStats                    1.5.0            conda
+  mclust                         6.1.2            conda
+  MCMCprecision                  0.4.2            manual
+  memoise                        2.0.1            conda
+  metapod                        1.14.0           conda
+  methods                        4.4.3            base R
+  mgcv                           1.9-4            base R
+  microbenchmark                 1.5.0            manual
+  mime                           0.13             conda
+  miniUI                         0.1.2            conda
+  minqa                          1.2.8            conda
+  mixtools                       2.0.0.1          manual
+  mnormt                         2.1.2            manual
+  modelr                         0.1.11           manual
+  msigdbr                        26.1.0           manual
+  multicool                      1.0.1            manual
+  munsell                        0.5.1            conda
+  muscat                         1.20.0           manual
+  mvtnorm                        1.3-6            manual
+  ncdfFlow                       2.52.1           manual
+  network                        1.19.0           manual
+  nlme                           3.1-169          base R
+  nloptr                         2.2.1            conda
+  nnet                           7.3-20           base R
+  nortest                        1.0-4            manual
+  numDeriv                       2016.8-1.1       conda
+  openssl                        2.3.5            conda
+  otel                           0.2.0            conda
+  parallel                       4.4.3            base R
+  parallelly                     1.46.1           conda
+  patchwork                      1.3.2            conda
+  pbapply                        1.7-4            conda
+  pbkrtest                       0.5.5            manual
+  pcaPP                          2.0-5            manual
+  pheatmap                       1.0.13           conda
+  pillar                         1.11.1           conda
+  pkgbuild                       1.4.8            conda
+  pkgconfig                      2.0.3            conda
+  plotly                         4.12.0           conda
+  plyr                           1.8.9            conda
+  png                            0.1-9            conda
+  polyclip                       1.10-7           conda
+  polynom                        1.4-1            manual
+  posterior                      1.7.0            conda
+  pracma                         2.4.6            conda
+  preprocessCore                 1.68.0           manual
+  prettyunits                    1.2.0            conda
+  pROC                           1.19.0.1         manual
+  processx                       3.8.7            conda
+  progress                       1.2.3            manual
+  progressr                      0.19.0           conda
+  promises                       1.5.0            conda
+  ps                             1.9.2            conda
+  purrr                          1.2.1            conda
+  quantreg                       6.1              manual
+  QuickJSR                       1.9.0            conda
+  R.methodsS3                    1.8.2            manual
+  R.oo                           1.27.1           manual
+  R.utils                        2.13.0           manual
+  R6                             2.6.1            conda
+  ragg                           1.5.2            conda
+  rainbow                        3.8              manual
+  RANN                           2.6.2            conda
+  rappdirs                       0.3.4            conda
+  RBGL                           1.82.0           manual
+  rbibutils                      2.4.1            conda
+  RColorBrewer                   1.1-3            conda
+  Rcpp                           1.1.1            conda
+  RcppAnnoy                      0.0.23           conda
+  RcppArmadillo                  15.2.4-1         conda
+  RcppEigen                      0.3.4.0.2        conda
+  RcppHNSW                       0.6.0            conda
+  RcppML                         0.3.7.1          conda
+  RcppParallel                   5.1.11-2         conda
+  RcppProgress                   0.4.2            conda
+  RcppTOML                       0.2.3            conda
+  RCurl                          1.98-1.18        conda
+  Rdpack                         2.6.6            conda
+  reformulas                     0.4.4            conda
+  remaCor                        0.0.20           manual
+  remotes                        2.5.0            conda
+  reshape2                       1.4.5            conda
+  restfulr                       0.0.16           conda
+  reticulate                     1.45.0           conda
+  Rgraphviz                      2.50.0           manual
+  rhdf5                          2.50.2           manual
+  rhdf5filters                   1.18.1           manual
+  Rhdf5lib                       1.28.0           manual
+  RhpcBLASctl                    0.23-42          manual
+  Rhtslib                        3.2.0            conda
+  rjson                          0.2.23           conda
+  rlang                          1.1.7            conda
+  rmarkdown                      2.31             conda
+  robustbase                     0.99-7           manual
+  ROCR                           1.0-12           conda
+  rprojroot                      2.1.1            conda
+  RProtoBufLib                   2.18.0           manual
+  rrcov                          1.7-7            manual
+  Rsamtools                      2.22.0           conda
+  RSpectra                       0.16-2           conda
+  rstan                          2.32.7           conda
+  rstantools                     2.6.0            manual
+  rstatix                        0.7.3            manual
+  rsvd                           1.0.5            conda
+  rtracklayer                    1.66.0           conda
+  Rtsne                          0.17             conda
+  S4Arrays                       1.6.0            conda
+  S4Vectors                      0.44.0           conda
+  S7                             0.2.1            conda
+  sandwich                       3.1-1            manual
+  sass                           0.4.10           conda
+  ScaledMatrix                   1.14.0           conda
+  scales                         1.4.0            conda
+  scater                         1.34.1           conda
+  scattermore                    1.2              conda
+  scDblFinder                    1.23.4           conda
+  scran                          1.34.0           conda
+  sctransform                    0.4.3            conda
+  scuttle                        1.16.0           conda
+  segmented                      2.2-1            conda
+  Seurat                         5.4.0            conda
+  SeuratObject                   5.3.0            conda
+  shape                          1.4.6.1          manual
+  shiny                          1.13.0           conda
+  SingleCellExperiment           1.28.0           conda
+  sitmo                          2.0.2            conda
+  snow                           0.4-4            conda
+  SoupX                          1.6.2            manual
+  sourcetools                    0.1.7-2          conda
+  sp                             2.2-1            conda
+  spam                           2.11-3           conda
+  SparseArray                    1.6.0            conda
+  SparseM                        1.84-2           manual
+  sparseMatrixStats              1.18.0           manual
+  spatstat.data                  3.1-9            conda
+  spatstat.explore               3.8-0            conda
+  spatstat.geom                  3.7-3            conda
+  spatstat.random                3.4-5            conda
+  spatstat.sparse                3.1-0            conda
+  spatstat.univar                3.1-7            conda
+  spatstat.utils                 3.2-2            conda
+  splines                        4.4.3            base R
+  StanHeaders                    2.32.10          conda
+  statmod                        1.5.1            conda
+  statnet.common                 4.13.0           manual
+  stats                          4.4.3            base R
+  stats4                         4.4.3            base R
+  stringi                        1.8.7            conda
+  stringr                        1.6.0            conda
+  SummarizedExperiment           1.36.0           conda
+  survival                       3.8-6            base R
+  sys                            3.4.3            conda
+  systemfonts                    1.3.2            conda
+  tcltk                          4.4.3            base R
+  tensor                         1.5.1            conda
+  tensorA                        0.36.2.1         conda
+  textshaping                    1.0.5            conda
+  ThresholdR                     0.1.0            vendored
+  tibble                         3.3.1            conda
+  tidyr                          1.3.2            conda
+  tidyselect                     1.2.1            conda
+  timeDate                       4052.112         manual
+  tinytex                        0.59             conda
+  TMB                            1.9.21           manual
+  tools                          4.4.3            base R
+  UCSC.utils                     1.2.0            conda
+  urca                           1.3-4            manual
+  utf8                           1.2.6            conda
+  utils                          4.4.3            base R
+  uwot                           0.2.4            conda
+  variancePartition              1.36.3           manual
+  vctrs                          0.7.2            conda
+  vipor                          0.4.7            conda
+  viridis                        0.6.5            conda
+  viridisLite                    0.4.3            conda
+  withr                          3.0.2            conda
+  WriteXLS                       6.8.0            manual
+  xfun                           0.57             conda
+  xgboost                        3.2.0.1          conda
+  XML                            3.99-0.23        conda
+  xml2                           1.5.2            conda
+  xtable                         1.8-8            conda
+  XVector                        0.46.0           conda
+  yaml                           2.3.12           conda
+  zellkonverter                  1.16.0           manual
+  zlibbioc                       1.52.0           conda
+  zoo                            1.8-15           conda
+
