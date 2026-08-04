@@ -35,7 +35,7 @@ if (!params.project_root) {
     error """
     Required param missing: --project_root
       Point this at the calling study's project root. citeseq-nf exports
-      SAGE_PROJECT_ROOT to every process, and scripts/config.py reads it
+      CITESEQ_PROJECT_ROOT to every process, and scripts/config.py reads it
       to resolve paths.
     Example:
       ./run.sh run ./main.nf --project_root /path/to/your/study --outdir /path/to/your/study
@@ -67,6 +67,17 @@ if (!params.panel) {
       rna_concordance). See panels/example_panel.yaml for the schema.
     Example:
       --panel ${workflow.projectDir}/panels/example_panel.yaml
+    """.stripIndent().trim()
+}
+if (!params.data_root) {
+    error """
+    Required param missing: --data_root
+      Directory holding the CellRanger output, one subdirectory per library.
+      Each library directory must contain raw_feature_bc_matrix.h5 and
+      filtered_feature_bc_matrix.h5, plus graph-based clusters either as
+      analysis/clustering/ or as analysis.tar.gz.
+    Example:
+      --data_root /path/to/your/study/data/cellranger
     """.stripIndent().trim()
 }
 

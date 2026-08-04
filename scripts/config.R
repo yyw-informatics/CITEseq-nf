@@ -5,39 +5,56 @@
 # calling repo, NOT here.
 #
 # Environment-variable contract — see scripts/config.py for full reference.
-#   SAGE_PROJECT_ROOT           REQUIRED. Errors if unset.
-#   SAGE_PROCESSED_DIR          Override for {PROJECT_ROOT}/data/processed
-#   SAGE_MODELS_DIR             Override for {PROJECT_ROOT}/models
-#   SAGE_RESULTS_DIR            Override for {PROJECT_ROOT}/results
-#   SAGE_FIGURES_DIR            Override for {PROJECT_ROOT}/figures
-#   SAGE_EXTERNAL_DIR           Override for {PROJECT_ROOT}/data/external
-#   SAGE_DATA_ROOT              Override for {PROJECT_ROOT}/10X_cloud/outs
-#   SAGE_SAMPLE_METADATA_JSON   JSON file path; maps library_id -> metadata
-#   SAGE_FORCED_HVGS_FILE       Text file path; one gene symbol per line
-#   SAGE_PANEL_YAML             REQUIRED. Panel YAML path (see
+#   CITESEQ_PROJECT_ROOT           REQUIRED. Errors if unset.
+#   CITESEQ_DATA_ROOT              REQUIRED. CellRanger input root: one
+#                               subdirectory per library, each holding the
+#                               raw + filtered feature-barcode h5 files.
+#                               Errors if unset.
+#   CITESEQ_PROCESSED_DIR          Override for {PROJECT_ROOT}/data/processed
+#   CITESEQ_MODELS_DIR             Override for {PROJECT_ROOT}/models
+#   CITESEQ_RESULTS_DIR            Override for {PROJECT_ROOT}/results
+#   CITESEQ_FIGURES_DIR            Override for {PROJECT_ROOT}/figures
+#   CITESEQ_EXTERNAL_DIR           Override for {PROJECT_ROOT}/data/external
+#   CITESEQ_SAMPLE_METADATA_JSON   JSON file path; maps library_id -> metadata
+#   CITESEQ_FORCED_HVGS_FILE       Text file path; one gene symbol per line
+#   CITESEQ_PANEL_YAML             REQUIRED. Panel YAML path (see
 #                               panels/example_panel.yaml for the schema).
 
 # ═════════════════════════════════════════════════════════════════════
 # Project root — REQUIRED from env
 # ═════════════════════════════════════════════════════════════════════
-PROJECT_ROOT <- Sys.getenv("SAGE_PROJECT_ROOT", unset = NA_character_)
+PROJECT_ROOT <- Sys.getenv("CITESEQ_PROJECT_ROOT", unset = NA_character_)
 if (is.na(PROJECT_ROOT) || PROJECT_ROOT == "") {
     stop(paste(
-        "citeseq-nf requires SAGE_PROJECT_ROOT to be set. Nextflow exports",
+        "citeseq-nf requires CITESEQ_PROJECT_ROOT to be set. Nextflow exports",
         "it automatically via beforeScript; for direct script invocation,",
-        "set SAGE_PROJECT_ROOT to the calling study's project root."
+        "set CITESEQ_PROJECT_ROOT to the calling study's project root."
+    ))
+}
+
+# ═════════════════════════════════════════════════════════════════════
+# Input data root — REQUIRED from env
+# ═════════════════════════════════════════════════════════════════════
+DATA_ROOT <- Sys.getenv("CITESEQ_DATA_ROOT", unset = NA_character_)
+if (is.na(DATA_ROOT) || DATA_ROOT == "") {
+    stop(paste(
+        "citeseq-nf requires CITESEQ_DATA_ROOT to be set. Pass",
+        "--data_root /path/to/your/cellranger_outs to nextflow, or export",
+        "CITESEQ_DATA_ROOT when invoking R scripts directly. It must point at",
+        "a directory holding one subdirectory per library, each containing",
+        "that library's CellRanger raw_feature_bc_matrix.h5 and",
+        "filtered_feature_bc_matrix.h5."
     ))
 }
 
 # ═════════════════════════════════════════════════════════════════════
 # Base paths (env-overridable, defaults derived from PROJECT_ROOT)
 # ═════════════════════════════════════════════════════════════════════
-DATA_ROOT     <- Sys.getenv("SAGE_DATA_ROOT",     file.path(PROJECT_ROOT, "10X_cloud/outs"))
-PROCESSED_DIR <- Sys.getenv("SAGE_PROCESSED_DIR", file.path(PROJECT_ROOT, "data/processed"))
-EXTERNAL_DIR  <- Sys.getenv("SAGE_EXTERNAL_DIR",  file.path(PROJECT_ROOT, "data/external"))
-MODELS_DIR    <- Sys.getenv("SAGE_MODELS_DIR",    file.path(PROJECT_ROOT, "models"))
-RESULTS_DIR   <- Sys.getenv("SAGE_RESULTS_DIR",   file.path(PROJECT_ROOT, "results"))
-FIGURES_DIR   <- Sys.getenv("SAGE_FIGURES_DIR",   file.path(PROJECT_ROOT, "figures"))
+PROCESSED_DIR <- Sys.getenv("CITESEQ_PROCESSED_DIR", file.path(PROJECT_ROOT, "data/processed"))
+EXTERNAL_DIR  <- Sys.getenv("CITESEQ_EXTERNAL_DIR",  file.path(PROJECT_ROOT, "data/external"))
+MODELS_DIR    <- Sys.getenv("CITESEQ_MODELS_DIR",    file.path(PROJECT_ROOT, "models"))
+RESULTS_DIR   <- Sys.getenv("CITESEQ_RESULTS_DIR",   file.path(PROJECT_ROOT, "results"))
+FIGURES_DIR   <- Sys.getenv("CITESEQ_FIGURES_DIR",   file.path(PROJECT_ROOT, "figures"))
 
 RESULTS_PHASE1_QC        <- file.path(RESULTS_DIR, "phase1_qc")
 RESULTS_PHASE2_EMBEDDING <- file.path(RESULTS_DIR, "phase2_embedding")
@@ -45,10 +62,10 @@ RESULTS_PHASE2_EMBEDDING <- file.path(RESULTS_DIR, "phase2_embedding")
 # ═════════════════════════════════════════════════════════════════════
 # Sample metadata + sample dirs — loaded from env-pointed JSON file
 # ═════════════════════════════════════════════════════════════════════
-.sample_meta_path <- Sys.getenv("SAGE_SAMPLE_METADATA_JSON", unset = "")
+.sample_meta_path <- Sys.getenv("CITESEQ_SAMPLE_METADATA_JSON", unset = "")
 if (nzchar(.sample_meta_path) && file.exists(.sample_meta_path)) {
     if (!requireNamespace("jsonlite", quietly = TRUE)) {
-        stop("jsonlite is required to load SAGE_SAMPLE_METADATA_JSON")
+        stop("jsonlite is required to load CITESEQ_SAMPLE_METADATA_JSON")
     }
     SAMPLE_METADATA <- jsonlite::fromJSON(
         .sample_meta_path, simplifyVector = FALSE
@@ -87,7 +104,7 @@ STEP01_TEMP_DIR      <- file.path(PROCESSED_DIR, "step01_temp")
 # ═════════════════════════════════════════════════════════════════════
 # HVG — forced-include gene list (loaded from env-pointed text file)
 # ═════════════════════════════════════════════════════════════════════
-.forced_hvgs_path <- Sys.getenv("SAGE_FORCED_HVGS_FILE", unset = "")
+.forced_hvgs_path <- Sys.getenv("CITESEQ_FORCED_HVGS_FILE", unset = "")
 if (nzchar(.forced_hvgs_path) && file.exists(.forced_hvgs_path)) {
     .lines <- readLines(.forced_hvgs_path, warn = FALSE)
     .lines <- trimws(.lines)
@@ -97,21 +114,21 @@ if (nzchar(.forced_hvgs_path) && file.exists(.forced_hvgs_path)) {
 }
 
 # ═════════════════════════════════════════════════════════════════════
-# ADT panel — loaded from required YAML (SAGE_PANEL_YAML)
+# ADT panel — loaded from required YAML (CITESEQ_PANEL_YAML)
 # ═════════════════════════════════════════════════════════════════════
-# SAGE_PANEL_YAML must point at a panel YAML file (see
+# CITESEQ_PANEL_YAML must point at a panel YAML file (see
 # panels/example_panel.yaml for the schema). Schema-validated at load.
-.panel_yaml_path <- Sys.getenv("SAGE_PANEL_YAML", unset = "")
+.panel_yaml_path <- Sys.getenv("CITESEQ_PANEL_YAML", unset = "")
 if (!nzchar(.panel_yaml_path)) {
     stop(paste(
-        "citeseq-nf requires SAGE_PANEL_YAML to be set.",
+        "citeseq-nf requires CITESEQ_PANEL_YAML to be set.",
         "Pass --panel /path/to/your_panel.yaml to nextflow, or export",
-        "SAGE_PANEL_YAML when invoking R scripts directly.",
+        "CITESEQ_PANEL_YAML when invoking R scripts directly.",
         "See panels/example_panel.yaml for the schema."
     ))
 }
 if (!requireNamespace("yaml", quietly = TRUE)) {
-    stop("R package 'yaml' is required to load SAGE_PANEL_YAML.")
+    stop("R package 'yaml' is required to load CITESEQ_PANEL_YAML.")
 }
 .panel <- yaml::read_yaml(.panel_yaml_path)
 for (.k in c("cellranger_names", "rename_map", "functional",
@@ -139,9 +156,9 @@ THRESHOLDR_MIN_COMPONENT_FRAC <- 0.05
 # Python binary (for R scripts that spawn Python subprocesses)
 # Set by nextflow.config beforeScript via params.python.
 # ═════════════════════════════════════════════════════════════════════
-PYTHON_BIN <- Sys.getenv("SAGE_PYTHON_BIN", unset = NA_character_)
+PYTHON_BIN <- Sys.getenv("CITESEQ_PYTHON_BIN", unset = NA_character_)
 if (is.na(PYTHON_BIN) || PYTHON_BIN == "") {
-    stop("SAGE_PYTHON_BIN env var not set. Pass --python (or --conda_env) to nextflow, or export SAGE_PYTHON_BIN before running R directly.")
+    stop("CITESEQ_PYTHON_BIN env var not set. Pass --python (or --conda_env) to nextflow, or export CITESEQ_PYTHON_BIN before running R directly.")
 }
 
 # ═════════════════════════════════════════════════════════════════════

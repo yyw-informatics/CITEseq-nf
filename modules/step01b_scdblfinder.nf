@@ -9,7 +9,7 @@
  *     Updates adata_qc_{branch}.h5ad with scDblFinder annotations
  *     results/phase1_qc/doublet_comparison_{branch}.csv
  *
- * Array pattern: 16 per-library tasks -> 1 aggregate.
+ * Array pattern: one task per library -> 1 aggregate.
  * The branch parameter selects soupx or decontx inputs.
  *
  * Channel-pure: no publishDir. Publishing is done at workflow level.

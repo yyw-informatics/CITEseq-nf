@@ -45,13 +45,13 @@ process step08_embedding {
     // Scoped here (not in the global beforeScript) so that toggling or
     // sweeping --biological_separation_marker only invalidates step08's
     // cache, leaving Phase A / Phase B (steps 00-07) -resume-able.
-    def bio_marker_export = params.biological_separation_marker ? "export SAGE_BIOLOGICAL_SEPARATION_MARKER=${params.biological_separation_marker}" : ""
+    def bio_marker_export = params.biological_separation_marker ? "export CITESEQ_BIOLOGICAL_SEPARATION_MARKER=${params.biological_separation_marker}" : ""
     """
     mkdir -p results/phase2_embedding figures models
-    export SAGE_PROCESSED_DIR=\$PWD
-    export SAGE_MODELS_DIR=\$PWD/models
-    export SAGE_RESULTS_DIR=\$PWD/results
-    export SAGE_FIGURES_DIR=\$PWD/figures
+    export CITESEQ_PROCESSED_DIR=\$PWD
+    export CITESEQ_MODELS_DIR=\$PWD/models
+    export CITESEQ_RESULTS_DIR=\$PWD/results
+    export CITESEQ_FIGURES_DIR=\$PWD/figures
     ${bio_marker_export}
     ${params.python} ${workflow.projectDir}/scripts/python/step08_embedding_comparison.py
     """

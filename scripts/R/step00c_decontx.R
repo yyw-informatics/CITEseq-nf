@@ -15,7 +15,7 @@
 # Pipeline Position
 # -----------------
 # Phase:    0 (pre-QC)
-# Depends:  CellRanger outputs (raw + filtered h5, analysis.tar.gz)
+# Depends:  CellRanger outputs (raw + filtered h5, graph-based clusters)
 # Feeds:    Step 1 (QC) — reads corrected h5 from DECONTX_DIR
 # Compute:  CPU, 8-16 GB per library, ~2 min per library
 #
@@ -23,13 +23,19 @@
 # -----
 # Per-library:  Rscript step00c_decontx.R --task N        (0-based index)
 # Aggregate:    Rscript step00c_decontx.R --aggregate
-# Sequential:   Rscript step00c_decontx.R                 (all 16, legacy)
+# Sequential:   Rscript step00c_decontx.R                 (all libraries, legacy)
 #
 # Inputs
 # ------
-# - 10X_cloud/outs/<sample>/filtered_feature_bc_matrix.h5  — cell calls
-# - 10X_cloud/outs/<sample>/raw_feature_bc_matrix.h5       — all droplets
-# - 10X_cloud/outs/<sample>/analysis.tar.gz                — CellRanger clusters
+# - <DATA_ROOT>/<sample>/filtered_feature_bc_matrix.h5  — cell calls
+# - <DATA_ROOT>/<sample>/raw_feature_bc_matrix.h5       — all droplets
+# - CellRanger graph-based clusters, in either supported layout:
+#   * local `cellranger count` (uncompressed tree)
+#       <DATA_ROOT>/<sample>/[outs/]analysis/clustering/
+#       {gene_expression_graphclust,graphclust}/clusters.csv
+#   * 10x Cloud Analysis download (tarball)
+#       <DATA_ROOT>/<sample>/analysis.tar.gz, member
+#       clustering/{gene_expression_graphclust,graphclust}/clusters.csv
 #
 # Outputs
 # -------
@@ -93,15 +99,59 @@ parse_args <- function(args) {
 opts <- parse_args(args)
 
 
-# ── Helper: extract CellRanger clusters from analysis.tar.gz ──
+# ── Helper: load CellRanger graph-based clusters ─────────────
+# Both input layouts are supported: a local `cellranger count` run, which
+# leaves an uncompressed analysis/ tree (under the sample dir or under
+# outs/), and a 10x Cloud Analysis download, which ships the same tree
+# inside analysis.tar.gz.  The first source that exists wins.
+# Returns a data.frame with columns Barcode, Cluster.
 extract_clusters <- function(sample_dir) {
-    tar_path <- file.path(DATA_ROOT, sample_dir, "analysis.tar.gz")
-    target <- "clustering/gene_expression_graphclust/clusters.csv"
-    tmp <- tempdir()
-    untar(tar_path, files = target, exdir = tmp)
-    clusters <- read.csv(file.path(tmp, target), stringsAsFactors = FALSE)
-    unlink(file.path(tmp, "clustering"), recursive = TRUE)
-    clusters
+    # CellRanger names the graph-based clustering dir
+    # gene_expression_graphclust for multi-feature (RNA + ADT) runs and
+    # graphclust for RNA-only runs.
+    graphclust_dirs <- c("gene_expression_graphclust", "graphclust")
+    sample_root <- file.path(DATA_ROOT, sample_dir)
+    csv_paths <- character(0)
+    for (root in c(sample_root, file.path(sample_root, "outs"))) {
+        for (gc_dir in graphclust_dirs) {
+            csv_paths <- c(csv_paths, file.path(root, "analysis", "clustering",
+                                                gc_dir, "clusters.csv"))
+        }
+    }
+
+    # 1. Uncompressed CellRanger tree
+    for (csv_path in csv_paths) {
+        if (file.exists(csv_path)) {
+            return(read.csv(csv_path, stringsAsFactors = FALSE))
+        }
+    }
+
+    # 2. 10x Cloud Analysis tarball
+    tar_path <- file.path(sample_root, "analysis.tar.gz")
+    tar_members <- file.path("clustering", graphclust_dirs, "clusters.csv")
+    searched <- c(csv_paths, paste0(tar_path, "::", tar_members))
+    if (file.exists(tar_path)) {
+        # Members may or may not carry a "./" prefix
+        tar_names <- untar(tar_path, list = TRUE)
+        stripped <- sub("^\\./", "", tar_names)
+        idx <- match(tar_members, stripped)
+        idx <- idx[!is.na(idx)]
+        if (length(idx) > 0) {
+            tmp <- tempfile("decontx_clusters_")
+            dir.create(tmp, recursive = TRUE, showWarnings = FALSE)
+            untar(tar_path, files = tar_names[idx[1]], exdir = tmp)
+            clusters <- read.csv(file.path(tmp, stripped[idx[1]]),
+                                 stringsAsFactors = FALSE)
+            unlink(tmp, recursive = TRUE)
+            return(clusters)
+        }
+    }
+
+    stop(sprintf(paste0(
+        "No CellRanger graph-based clusters found for sample %s.\n",
+        "  Step 0c accepts either a local `cellranger count` tree or a\n",
+        "  10x Cloud Analysis download (analysis.tar.gz). Searched:\n  %s"),
+        sample_dir, paste(searched, collapse = "\n  ")))
 }
 
 
@@ -348,26 +398,29 @@ validate <- function() {
         actual = as.character(csv_exists)
     )
 
-    # Check 2: 16 corrected h5 files
+    # Check 2: one corrected h5 per library
+    n_expected <- length(SAMPLE_DIRS)
     expected_h5 <- file.path(DECONTX_DIR, SAMPLE_DIRS,
                               "filtered_feature_bc_matrix.h5")
     h5_exist <- file.exists(expected_h5)
     n_h5 <- sum(h5_exist)
     results[["corrected_h5_count"]] <- list(
-        status = if (n_h5 == 16) "PASS" else if (n_h5 > 0) "WARN" else "FAIL",
-        detail = sprintf("%d/16 corrected h5 files exist", n_h5),
-        expected = "16",
+        # n_expected is 0 when no sample metadata was supplied. Guard it, or
+        # a run that produced nothing would report 0 == 0 as PASS.
+        status = if (n_expected > 0 && n_h5 == n_expected) "PASS" else if (n_h5 > 0) "WARN" else "FAIL",
+        detail = sprintf("%d/%d corrected h5 files exist", n_h5, n_expected),
+        expected = as.character(n_expected),
         actual = as.character(n_h5)
     )
 
-    # Check 3: summary has 16 rows
+    # Check 3: summary has one row per library
     if (csv_exists) {
         summ <- read.csv(summary_csv)
         n_rows <- nrow(summ)
         results[["summary_row_count"]] <- list(
-            status = if (n_rows == 16) "PASS" else "WARN",
+            status = if (n_expected > 0 && n_rows == n_expected) "PASS" else "WARN",
             detail = sprintf("Summary has %d rows", n_rows),
-            expected = "16",
+            expected = as.character(n_expected),
             actual = as.character(n_rows)
         )
 
@@ -432,14 +485,14 @@ if (!is.null(opts$task)) {
                 task_idx, sdir))
     summary_row <- process_library(sdir)
     save_per_library_csv(summary_row)
-    cat(sprintf("\nLibrary %d/16 complete.\n", task_idx + 1))
+    cat(sprintf("\nLibrary %d/%d complete.\n", task_idx + 1, length(sample_dirs)))
 
 } else if (opts$aggregate) {
     # Aggregation mode
     run_aggregate()
 
 } else {
-    # Sequential mode (all 16 libraries, legacy)
+    # Sequential mode (all libraries, legacy)
     cat("DecontX Ambient RNA Decontamination (sequential mode)\n")
     cat(sprintf("  Libraries: %d\n", length(sample_dirs)))
 

@@ -5,7 +5,7 @@
 # the result to Nextflow with --panel /path/to/your_panel.yaml.
 #
 # config.py loads and schema-validates the YAML at import time when
-# SAGE_PANEL_YAML is set (Nextflow exports this automatically from
+# CITESEQ_PANEL_YAML is set (Nextflow exports this automatically from
 # --panel). All ADT_* constants in scripts/config.py are derived from
 # this file.
 # ─────────────────────────────────────────────────────────────────────

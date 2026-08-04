@@ -11,8 +11,9 @@
  *   cellranger -> [soupx_array, decontx_array] -> qc_array -> scdblfinder_array -> select_branch
  *     -> (same downstream as above)
  *
- * Fan-out pattern: 16 libraries processed in parallel per step,
- * then aggregated before the next step begins.
+ * Fan-out pattern: every library is processed in parallel per step,
+ * then aggregated before the next step begins. The library count comes
+ * from --sample_metadata_json (or --n_libraries), never from a literal.
  *
  * By default only the selected branch (params.branch, default "decontx")
  * runs decontamination. Set --run_both_branches to run both SoupX and
@@ -32,6 +33,45 @@ include { step05a_thresholdr }                                      from '../mod
 include { step05b_kde }                                             from '../modules/step05b_kde'
 include { step05c_fitness }                                         from '../modules/step05c_fitness'
 
+/*
+ * Number of libraries to fan out over. Derived from the sample metadata
+ * JSON (one key per library, the same source scripts/config.py uses for
+ * SAMPLE_DIRS), so the array steps match the study actually being run.
+ * --n_libraries overrides it for pilot runs on a subset.
+ */
+def resolve_n_libraries() {
+    if (params.n_libraries != null) {
+        def n
+        try {
+            n = params.n_libraries as int
+        }
+        catch (Exception e) {
+            error "--n_libraries must be a whole number, got: ${params.n_libraries}"
+        }
+        if (n < 1) {
+            error "--n_libraries must be 1 or greater, got: ${params.n_libraries}"
+        }
+        return n
+    }
+    if (!params.sample_metadata_json) {
+        error """
+        Cannot determine how many libraries to process.
+          Pass --sample_metadata_json /path/to/sample_metadata.json
+          (a JSON object with one key per library, e.g. {"Lib01": {...}, ...}),
+          or pass --n_libraries N to set the count directly.
+        """.stripIndent()
+    }
+    def meta_file = file(params.sample_metadata_json)
+    if (!meta_file.exists()) {
+        error "--sample_metadata_json not found: ${params.sample_metadata_json}"
+    }
+    def meta = new groovy.json.JsonSlurper().parse(meta_file)
+    if (!(meta instanceof Map) || meta.isEmpty()) {
+        error "--sample_metadata_json must be a non-empty JSON object keyed by library id: ${params.sample_metadata_json}"
+    }
+    return meta.size()
+}
+
 workflow PHASE_A_QC {
     take:
     branch          // val: which decontamination branch to use ("decontx" or "soupx")
@@ -39,9 +79,14 @@ workflow PHASE_A_QC {
     main:
     def selected = params.branch ?: 'decontx'
 
+    // Task indices are 0-based and shared by every array step below.
+    def n_libraries = resolve_n_libraries()
+    def library_ids = (0..<n_libraries).toList()
+    log.info "Phase A: fanning out over ${n_libraries} librar${n_libraries == 1 ? 'y' : 'ies'}"
+
     // ── Decontamination: run selected branch (or both if requested) ─
     if (selected == 'soupx' || params.run_both_branches) {
-        soupx_ids = Channel.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+        soupx_ids = Channel.fromList(library_ids)
         step00b_soupx_task(soupx_ids)
         step00b_soupx_aggregate(
             step00b_soupx_task.out.done.collect()
@@ -49,7 +94,7 @@ workflow PHASE_A_QC {
     }
 
     if (selected == 'decontx' || params.run_both_branches) {
-        decontx_ids = Channel.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+        decontx_ids = Channel.fromList(library_ids)
         step00c_decontx_task(decontx_ids)
         step00c_decontx_aggregate(
             step00c_decontx_task.out.done.collect()
@@ -66,18 +111,18 @@ workflow PHASE_A_QC {
         decontam_done = step00c_decontx_aggregate.out.done
     }
 
-    // ── Step 01: QC + Scrublet (16 parallel tasks, gated) ───────────
-    // flatMap emits 16 task IDs only after decontam_done fires
-    qc_task_ids = decontam_done.flatMap { (0..15).toList() }
+    // ── Step 01: QC + Scrublet (one task per library, gated) ────────
+    // flatMap emits the task IDs only after decontam_done fires
+    qc_task_ids = decontam_done.flatMap { library_ids }
     step01_qc_task(qc_task_ids, branch)
     step01_qc_aggregate(
         step01_qc_task.out.done.collect(),
         branch
     )
 
-    // ── Step 01b: scDblFinder (16 parallel tasks, gated) ────────────
+    // ── Step 01b: scDblFinder (one task per library, gated) ─────────
     scdblfinder_task_ids = step01_qc_aggregate.out.done
-        .flatMap { (0..15).toList() }
+        .flatMap { library_ids }
     step01b_scdblfinder_task(scdblfinder_task_ids, branch)
     step01b_scdblfinder_aggregate(
         step01b_scdblfinder_task.out.done.collect(),

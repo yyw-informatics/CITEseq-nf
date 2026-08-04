@@ -27,7 +27,7 @@ process step04_rna_norm {
 
     script:
     """
-    export SAGE_PROCESSED_DIR=\$PWD
+    export CITESEQ_PROCESSED_DIR=\$PWD
     ${params.python} ${workflow.projectDir}/scripts/python/step04_rna_normalization.py
     """
 }

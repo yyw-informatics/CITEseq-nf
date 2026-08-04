@@ -3,11 +3,11 @@
  *
  * Contract:
  *   Input:  CellRanger outputs (read from DATA_ROOT on disk)
- *   Output: soupx_parallel/<sample>/filtered_feature_bc_matrix.h5 (x16)
- *           results/phase1_qc/soupx/soupx_diag_<sample>.csv (x16)
+ *   Output: soupx_parallel/<sample>/filtered_feature_bc_matrix.h5 (one per library)
+ *           results/phase1_qc/soupx/soupx_diag_<sample>.csv (one per library)
  *   Aggregate: results/phase1_qc/soupx/soupx_summary_parallel.csv + barplot
  *
- * Array pattern: 16 per-library tasks -> 1 aggregate.
+ * Array pattern: one task per library -> 1 aggregate.
  * Scripts read from DATA_ROOT and write to PROCESSED_DIR/RESULTS_DIR
  * on the real filesystem (not work-dir staged), because CellRanger
  * inputs are too large/complex to stage via channels.

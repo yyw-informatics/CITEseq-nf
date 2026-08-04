@@ -30,9 +30,9 @@ process step05c_fitness {
 
     script:
     """
-    export SAGE_PROCESSED_DIR=\$PWD
-    export SAGE_FIGURES_DIR=\$PWD/figures
-    export SAGE_RESULTS_DIR=\$PWD/results
+    export CITESEQ_PROCESSED_DIR=\$PWD
+    export CITESEQ_FIGURES_DIR=\$PWD/figures
+    export CITESEQ_RESULTS_DIR=\$PWD/results
     mkdir -p figures results/phase1_qc
     ${params.python} ${workflow.projectDir}/scripts/python/step05c_thresholdr_fitness.py
     """

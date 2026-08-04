@@ -17,7 +17,7 @@ Compute:  CPU, 16-32 GB RAM, 10-20 min
 
 Inputs
 ------
-- 10X_cloud/outs/<sample>/filtered_feature_bc_matrix.h5 -- CellRanger output, one per library
+- <DATA_ROOT>/<sample>/filtered_feature_bc_matrix.h5 -- CellRanger output, one per library
 
 Outputs
 -------

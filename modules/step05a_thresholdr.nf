@@ -27,7 +27,7 @@ process step05a_thresholdr {
 
     script:
     """
-    export SAGE_PROCESSED_DIR=\$PWD
+    export CITESEQ_PROCESSED_DIR=\$PWD
     ${params.rscript} ${workflow.projectDir}/scripts/R/step05a_thresholdr_gating.R
     """
 }

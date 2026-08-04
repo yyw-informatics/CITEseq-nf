@@ -7,7 +7,7 @@ Scope
 This file ships with citeseq-nf and covers only the GENERIC surface: paths,
 canonical artifact names, and decontamination / QC / HVG / embedding
 hyperparameters. The antibody panel is provided by the caller via a panel
-YAML (--panel / SAGE_PANEL_YAML); see panels/example_panel.yaml for the
+YAML (--panel / CITESEQ_PANEL_YAML); see panels/example_panel.yaml for the
 schema.
 
 Study overlays (sample metadata, forced HVG gene lists, classification
@@ -19,46 +19,49 @@ Environment-variable contract
 Nextflow's beforeScript (nextflow.config) exports these on every process;
 direct-script callers set them by hand.
 
-  SAGE_PROJECT_ROOT          REQUIRED. Caller study's project root.
+  CITESEQ_PROJECT_ROOT          REQUIRED. Caller study's project root.
                              Errors if unset.
 
-  SAGE_PROCESSED_DIR         Override for {PROJECT_ROOT}/data/processed
-  SAGE_MODELS_DIR            Override for {PROJECT_ROOT}/models
-  SAGE_RESULTS_DIR           Override for {PROJECT_ROOT}/results
-  SAGE_FIGURES_DIR           Override for {PROJECT_ROOT}/figures
-  SAGE_EXTERNAL_DIR          Override for {PROJECT_ROOT}/data/external
-  SAGE_DATA_ROOT             Override for {PROJECT_ROOT}/10X_cloud/outs
-                             (CellRanger outs/ root)
+  CITESEQ_DATA_ROOT             REQUIRED. CellRanger input root: one
+                             subdirectory per library, each holding that
+                             library's raw_feature_bc_matrix.h5 and
+                             filtered_feature_bc_matrix.h5. Errors if unset.
 
-  SAGE_SAMPLE_METADATA_JSON  Path to JSON file. Maps library_id -> dict of
+  CITESEQ_PROCESSED_DIR         Override for {PROJECT_ROOT}/data/processed
+  CITESEQ_MODELS_DIR            Override for {PROJECT_ROOT}/models
+  CITESEQ_RESULTS_DIR           Override for {PROJECT_ROOT}/results
+  CITESEQ_FIGURES_DIR           Override for {PROJECT_ROOT}/figures
+  CITESEQ_EXTERNAL_DIR          Override for {PROJECT_ROOT}/data/external
+
+  CITESEQ_SAMPLE_METADATA_JSON  Path to JSON file. Maps library_id -> dict of
                              {donor, age, age_group, timepoint, replicate}.
                              If unset or missing → SAMPLE_METADATA = {}.
 
-  SAGE_FORCED_HVGS_FILE      Path to text file. One gene symbol per line;
+  CITESEQ_FORCED_HVGS_FILE      Path to text file. One gene symbol per line;
                              blank lines and '#' comments ignored.
                              If unset or missing → FORCED_HVGS = [].
 
-  SAGE_QC_MAD_N_MADS         Override for QC_MAD_N_MADS (default 5).
+  CITESEQ_QC_MAD_N_MADS         Override for QC_MAD_N_MADS (default 5).
 
-  SAGE_PANEL_YAML            REQUIRED. Path to an ADT panel YAML (see
+  CITESEQ_PANEL_YAML            REQUIRED. Path to an ADT panel YAML (see
                              panels/example_panel.yaml for the schema).
                              Defines the ADT_* constants used by every
                              downstream step. Errors if unset.
 
-  SAGE_SOUPX_ANCHOR_GENES    Comma-separated list of anchor genes for the
+  CITESEQ_SOUPX_ANCHOR_GENES    Comma-separated list of anchor genes for the
                              SoupX post-correction validation step. Empty
                              default → validation step is skipped.
 
-  SAGE_HVG_SENTINEL_GENES    Comma-separated list of sentinel genes the
+  CITESEQ_HVG_SENTINEL_GENES    Comma-separated list of sentinel genes the
                              forced-HVG injection should retain. Empty
                              default → sentinel check is skipped.
 
-  SAGE_BIOLOGICAL_SEPARATION_MARKER
+  CITESEQ_BIOLOGICAL_SEPARATION_MARKER
                              Canonical ADT name used for the step08
                              biological-silhouette metric. Unset → block
                              is skipped.
 
-  SAGE_SAMPLE_GROUP_FIELD    Key in SAMPLE_METADATA entries used to order
+  CITESEQ_SAMPLE_GROUP_FIELD    Key in SAMPLE_METADATA entries used to order
                              and color samples in step01 QC figures (e.g.,
                              "age_group"). Unset → insertion order,
                              single color.
@@ -72,24 +75,37 @@ import yaml
 # ═════════════════════════════════════════════════════════════════════
 # Project root — REQUIRED from env; citeseq-nf does not embed a default
 # ═════════════════════════════════════════════════════════════════════
-PROJECT_ROOT = os.environ.get("SAGE_PROJECT_ROOT")
+PROJECT_ROOT = os.environ.get("CITESEQ_PROJECT_ROOT")
 if PROJECT_ROOT is None:
     raise RuntimeError(
-        "citeseq-nf requires SAGE_PROJECT_ROOT to be set. "
+        "citeseq-nf requires CITESEQ_PROJECT_ROOT to be set. "
         "Nextflow exports it automatically via beforeScript; for direct "
-        "script invocation, set SAGE_PROJECT_ROOT to the calling study's "
+        "script invocation, set CITESEQ_PROJECT_ROOT to the calling study's "
         "project root (the dir holding data/processed/, models/, etc.)."
+    )
+
+# ═════════════════════════════════════════════════════════════════════
+# Input data root — REQUIRED from env; citeseq-nf does not embed a default
+# ═════════════════════════════════════════════════════════════════════
+DATA_ROOT = os.environ.get("CITESEQ_DATA_ROOT")
+if not DATA_ROOT:
+    raise RuntimeError(
+        "citeseq-nf requires CITESEQ_DATA_ROOT to be set. "
+        "Pass --data_root /path/to/your/cellranger_outs to nextflow, or "
+        "export CITESEQ_DATA_ROOT when invoking scripts directly. It must "
+        "point at a directory holding one subdirectory per library, each "
+        "containing that library's CellRanger raw_feature_bc_matrix.h5 and "
+        "filtered_feature_bc_matrix.h5."
     )
 
 # ═════════════════════════════════════════════════════════════════════
 # Base paths (env-overridable, defaults derived from PROJECT_ROOT)
 # ═════════════════════════════════════════════════════════════════════
-DATA_ROOT     = os.environ.get("SAGE_DATA_ROOT",    os.path.join(PROJECT_ROOT, "10X_cloud/outs"))
-PROCESSED_DIR = os.environ.get("SAGE_PROCESSED_DIR", os.path.join(PROJECT_ROOT, "data/processed"))
-EXTERNAL_DIR  = os.environ.get("SAGE_EXTERNAL_DIR",  os.path.join(PROJECT_ROOT, "data/external"))
-MODELS_DIR    = os.environ.get("SAGE_MODELS_DIR",    os.path.join(PROJECT_ROOT, "models"))
-RESULTS_DIR   = os.environ.get("SAGE_RESULTS_DIR",   os.path.join(PROJECT_ROOT, "results"))
-FIGURES_DIR   = os.environ.get("SAGE_FIGURES_DIR",   os.path.join(PROJECT_ROOT, "figures"))
+PROCESSED_DIR = os.environ.get("CITESEQ_PROCESSED_DIR", os.path.join(PROJECT_ROOT, "data/processed"))
+EXTERNAL_DIR  = os.environ.get("CITESEQ_EXTERNAL_DIR",  os.path.join(PROJECT_ROOT, "data/external"))
+MODELS_DIR    = os.environ.get("CITESEQ_MODELS_DIR",    os.path.join(PROJECT_ROOT, "models"))
+RESULTS_DIR   = os.environ.get("CITESEQ_RESULTS_DIR",   os.path.join(PROJECT_ROOT, "results"))
+FIGURES_DIR   = os.environ.get("CITESEQ_FIGURES_DIR",   os.path.join(PROJECT_ROOT, "figures"))
 
 TOTALVI_MODEL_DIR = os.path.join(MODELS_DIR, "totalvi_model")
 SCVI_MODEL_DIR    = os.path.join(MODELS_DIR, "scvi_model")
@@ -124,7 +140,7 @@ THRESHOLDR_THRESHOLDS     = os.path.join(PROCESSED_DIR, "thresholdr_thresholds.c
 #         "age_group": "young", "timepoint": "d0", "replicate": 1},
 #     ...
 #   }
-_sample_meta_path = os.environ.get("SAGE_SAMPLE_METADATA_JSON")
+_sample_meta_path = os.environ.get("CITESEQ_SAMPLE_METADATA_JSON")
 if _sample_meta_path and os.path.exists(_sample_meta_path):
     with open(_sample_meta_path) as _f:
         SAMPLE_METADATA = json.load(_f)
@@ -144,7 +160,7 @@ def _env_csv_list(var):
 # Optional sample-grouping field for step01 QC figures. When set to a key
 # present in SAMPLE_METADATA entries, step01 sorts samples by that field's
 # value and colors them from matplotlib tab10.
-SAMPLE_GROUP_FIELD = os.environ.get("SAGE_SAMPLE_GROUP_FIELD") or None
+SAMPLE_GROUP_FIELD = os.environ.get("CITESEQ_SAMPLE_GROUP_FIELD") or None
 
 # ═════════════════════════════════════════════════════════════════════
 # SoupX ambient RNA decontamination (Step 0b)
@@ -158,7 +174,7 @@ SOUPX_ROUND_TO_INT  = True
 # Anchor genes for the post-SoupX validation pass (genes expected to be
 # exclusively ambient in the input data; study-specific). Empty → skip
 # validation.
-SOUPX_ANCHOR_GENES = _env_csv_list("SAGE_SOUPX_ANCHOR_GENES")
+SOUPX_ANCHOR_GENES = _env_csv_list("CITESEQ_SOUPX_ANCHOR_GENES")
 
 # ═════════════════════════════════════════════════════════════════════
 # DecontX ambient RNA decontamination (Step 0c)
@@ -172,7 +188,7 @@ DECONTX_DELTA       = [10, 10]
 # ═════════════════════════════════════════════════════════════════════
 # QC + doublet detection (Steps 1, 1b)
 # ═════════════════════════════════════════════════════════════════════
-QC_MAD_N_MADS              = int(os.environ.get("SAGE_QC_MAD_N_MADS", "5"))
+QC_MAD_N_MADS              = int(os.environ.get("CITESEQ_QC_MAD_N_MADS", "5"))
 QC_MIN_GENES_ABSOLUTE      = 100
 QC_MIN_UMI_ABSOLUTE        = 200
 QC_MAX_MT_PCT              = 20
@@ -192,7 +208,7 @@ N_HVG = 4000  # Seurat-v3 flavor, batch_key="sample_id"
 # FORCED_HVGS — loaded from env-pointed text file (empty default).
 # Format: one gene symbol per line; blank lines and '#'-comments ignored.
 # Study overlay provides its own gene list; citeseq-nf is study-neutral.
-_forced_hvgs_path = os.environ.get("SAGE_FORCED_HVGS_FILE")
+_forced_hvgs_path = os.environ.get("CITESEQ_FORCED_HVGS_FILE")
 if _forced_hvgs_path and os.path.exists(_forced_hvgs_path):
     with open(_forced_hvgs_path) as _f:
         FORCED_HVGS = [
@@ -203,7 +219,7 @@ else:
     FORCED_HVGS = []
 
 # Sentinel genes for the forced-HVG injection check. Empty → skip check.
-HVG_SENTINEL_GENES = _env_csv_list("SAGE_HVG_SENTINEL_GENES")
+HVG_SENTINEL_GENES = _env_csv_list("CITESEQ_HVG_SENTINEL_GENES")
 
 # ═════════════════════════════════════════════════════════════════════
 # ThresholdR + KDE (ADT gating — Step 5a/5b/5c)
@@ -223,9 +239,9 @@ THRESHOLDR_BIC_MARGIN_FAIL          = 0.0
 ADT_FG_PROB_FALLBACK                = 0.5
 
 # ═════════════════════════════════════════════════════════════════════
-# ADT panel — loaded from required YAML (SAGE_PANEL_YAML)
+# ADT panel — loaded from required YAML (CITESEQ_PANEL_YAML)
 # ═════════════════════════════════════════════════════════════════════
-# SAGE_PANEL_YAML must point at a panel YAML file (see
+# CITESEQ_PANEL_YAML must point at a panel YAML file (see
 # panels/example_panel.yaml for the schema). The ADT_* constants below
 # are loaded from it and schema-validated at import time.
 def _load_panel_yaml(path):
@@ -310,12 +326,12 @@ def _load_panel_yaml(path):
     }
 
 
-_panel_yaml_path = os.environ.get("SAGE_PANEL_YAML")
+_panel_yaml_path = os.environ.get("CITESEQ_PANEL_YAML")
 if not _panel_yaml_path:
     raise RuntimeError(
-        "citeseq-nf requires SAGE_PANEL_YAML to be set. "
+        "citeseq-nf requires CITESEQ_PANEL_YAML to be set. "
         "Pass --panel /path/to/your_panel.yaml to nextflow, or export "
-        "SAGE_PANEL_YAML when invoking scripts directly. "
+        "CITESEQ_PANEL_YAML when invoking scripts directly. "
         "See panels/example_panel.yaml for the schema."
     )
 _panel = _load_panel_yaml(_panel_yaml_path)
@@ -381,7 +397,7 @@ LEIDEN_RESOLUTION = 0.8
 # Canonical ADT name used as a biological-separation proxy in step08's
 # silhouette metric. When None, that block is skipped (batch-mixing
 # silhouette still runs).
-BIOLOGICAL_SEPARATION_MARKER = os.environ.get("SAGE_BIOLOGICAL_SEPARATION_MARKER") or None
+BIOLOGICAL_SEPARATION_MARKER = os.environ.get("CITESEQ_BIOLOGICAL_SEPARATION_MARKER") or None
 
 # ═════════════════════════════════════════════════════════════════════
 # General infrastructure

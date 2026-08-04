@@ -11,7 +11,7 @@
  *     adata_qc_{branch}.h5ad, adata_adt_raw_{branch}.h5ad
  *     adt_counts_for_thresholdr_{branch}.csv, qc_summary_{branch}.csv
  *
- * Array pattern: 16 per-library tasks -> 1 aggregate.
+ * Array pattern: one task per library -> 1 aggregate.
  * The branch parameter selects which decontamination input to use.
  *
  * Channel-pure: no publishDir. Publishing is done at workflow level.

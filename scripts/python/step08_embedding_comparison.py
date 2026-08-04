@@ -113,7 +113,7 @@ def main(branch=None):
             raise KeyError(
                 f"BIOLOGICAL_SEPARATION_MARKER='{BIOLOGICAL_SEPARATION_MARKER}' "
                 f"but adata has no column '{fg_col}'. Set "
-                f"SAGE_BIOLOGICAL_SEPARATION_MARKER to a marker in "
+                f"CITESEQ_BIOLOGICAL_SEPARATION_MARKER to a marker in "
                 f"ADT_FUNCTIONAL_MARKERS or unset it."
             )
         bio_label = (adata_rna.obs[fg_col] > 0.5).astype(str).values

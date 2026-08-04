@@ -18,8 +18,8 @@
 #
 # Inputs
 # ------
-# - 10X_cloud/outs/<sample>/filtered_feature_bc_matrix.h5 — CellRanger cell calls
-# - 10X_cloud/outs/<sample>/raw_feature_bc_matrix.h5       — All barcodes (for empties)
+# - <DATA_ROOT>/<sample>/filtered_feature_bc_matrix.h5 — CellRanger cell calls
+# - <DATA_ROOT>/<sample>/raw_feature_bc_matrix.h5       — All barcodes (for empties)
 #
 # Outputs
 # -------
@@ -156,23 +156,27 @@ validate <- function() {
         actual = as.character(exists)
     )
 
-    # Expect ~140K-190K rows (cells), 4 marker cols + barcode + sample_id
+    # Shape check: one row per normalized cell, one column per functional
+    # panel marker plus barcode and sample_id.  Cohort size is study-
+    # specific, so only require a non-empty table.
+    n_expected_cols <- length(FUNCTIONAL_MARKERS) + 2  # + barcode + sample_id
     if (exists) {
         dsb_data <- read.csv(path)
         n_rows <- nrow(dsb_data)
         n_cols <- ncol(dsb_data)
-        row_ok <- n_rows >= 100000
+        row_ok <- n_rows > 0
         results[["dsb_row_count"]] <- list(
             status = if (row_ok) "PASS" else "WARN",
             detail = sprintf("Row count: %d", n_rows),
-            expected = ">=100000 rows (cells)",
+            expected = ">0 rows (cells)",
             actual = as.character(n_rows)
         )
-        col_ok <- n_cols >= 4
+        col_ok <- n_cols == n_expected_cols
         results[["dsb_col_count"]] <- list(
             status = if (col_ok) "PASS" else "WARN",
             detail = sprintf("Column count: %d (includes barcode + sample_id)", n_cols),
-            expected = ">=4 columns (markers + barcode + sample_id)",
+            expected = sprintf("%d columns (%d panel markers + barcode + sample_id)",
+                               n_expected_cols, length(FUNCTIONAL_MARKERS)),
             actual = as.character(n_cols)
         )
     }

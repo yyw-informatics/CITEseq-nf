@@ -26,7 +26,7 @@ process step03_clr {
 
     script:
     """
-    export SAGE_PROCESSED_DIR=\$PWD
+    export CITESEQ_PROCESSED_DIR=\$PWD
     ${params.python} ${workflow.projectDir}/scripts/python/step03_clr_protein.py
     """
 }

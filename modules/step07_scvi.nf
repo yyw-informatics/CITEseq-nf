@@ -35,10 +35,10 @@ process step07_scvi {
     script:
     """
     mkdir -p models results/phase2_embedding figures
-    export SAGE_PROCESSED_DIR=\$PWD
-    export SAGE_MODELS_DIR=\$PWD/models
-    export SAGE_RESULTS_DIR=\$PWD/results
-    export SAGE_FIGURES_DIR=\$PWD/figures
+    export CITESEQ_PROCESSED_DIR=\$PWD
+    export CITESEQ_MODELS_DIR=\$PWD/models
+    export CITESEQ_RESULTS_DIR=\$PWD/results
+    export CITESEQ_FIGURES_DIR=\$PWD/figures
     ${params.python} ${workflow.projectDir}/scripts/python/step07_scvi.py
     """
 }

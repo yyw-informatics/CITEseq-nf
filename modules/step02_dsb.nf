@@ -7,7 +7,7 @@
  *   Applies dsb Step I ambient correction to 4 functional ADT markers.
  *
  * Note: This step reads CellRanger filtered/raw matrices directly from
- * DATA_ROOT (10X_cloud/outs/), not from prior step outputs. The val(ready)
+ * DATA_ROOT (<DATA_ROOT>/<sample>/), not from prior step outputs. The val(ready)
  * gate ensures upstream steps (select_branch) have completed.
  *
  * publishDir copies output to data/processed/ for downstream steps.
@@ -27,7 +27,7 @@ process step02_dsb {
 
     script:
     """
-    export SAGE_PROCESSED_DIR=\$PWD
+    export CITESEQ_PROCESSED_DIR=\$PWD
     ${params.rscript} ${workflow.projectDir}/scripts/R/step02_dsb_normalization.R
     """
 }

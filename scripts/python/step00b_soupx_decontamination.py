@@ -13,19 +13,25 @@ ADT rows unchanged, so Step 1 can read them transparently.
 Pipeline Position
 -----------------
 Phase:    0 (pre-QC)
-Depends:  CellRanger outputs (raw + filtered h5, analysis.tar.gz)
+Depends:  CellRanger outputs (raw + filtered h5, graph-based clusters)
 Feeds:    Step 1 (QC)
 Compute:  CPU, 32 GB RAM, ~2-4 min/library sequential
 
 Inputs
 ------
-- 10X_cloud/outs/<sample>/raw_feature_bc_matrix.h5        -- unfiltered droplets
-- 10X_cloud/outs/<sample>/filtered_feature_bc_matrix.h5   -- filtered cells
-- 10X_cloud/outs/<sample>/analysis.tar.gz                 -- CellRanger clusters
+- <DATA_ROOT>/<sample>/raw_feature_bc_matrix.h5       -- unfiltered droplets
+- <DATA_ROOT>/<sample>/filtered_feature_bc_matrix.h5  -- filtered cells
+- CellRanger graph-based clusters, in either supported layout:
+  * local `cellranger count` (uncompressed tree)
+      <DATA_ROOT>/<sample>/[outs/]analysis/clustering/
+      {gene_expression_graphclust,graphclust}/clusters.csv
+  * 10x Cloud Analysis download (tarball)
+      <DATA_ROOT>/<sample>/analysis.tar.gz, member
+      clustering/{gene_expression_graphclust,graphclust}/clusters.csv
 
 Outputs
 -------
-- data/processed/soupx/<sample>/filtered_feature_bc_matrix.h5  -- corrected h5 (x16)
+- data/processed/soupx/<sample>/filtered_feature_bc_matrix.h5  -- corrected h5, per library
 - results/phase1_qc/soupx/soupx_summary.csv                   -- rho + diagnostics
 - results/phase1_qc/soupx/soupx_rho_barplot.pdf               -- rho bar chart
 
@@ -62,17 +68,57 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 def extract_clusters(sample_dir):
-    """Extract CellRanger graph-based clusters from analysis.tar.gz.
+    """Load CellRanger graph-based clusters for one library.
+
+    Both input layouts are supported: a local ``cellranger count`` run,
+    which leaves an uncompressed analysis/ tree (under the sample dir or
+    under outs/), and a 10x Cloud Analysis download, which ships the same
+    tree inside analysis.tar.gz. The first source that exists wins.
 
     Returns a DataFrame with columns ['Barcode', 'Cluster'].
     """
+    # CellRanger names the graph-based clustering dir
+    # gene_expression_graphclust for multi-feature (RNA + ADT) runs and
+    # graphclust for RNA-only runs.
+    graphclust_dirs = ("gene_expression_graphclust", "graphclust")
+    csv_relpaths = [
+        os.path.join(prefix, "analysis", "clustering", gc, "clusters.csv")
+        for prefix in ("", "outs")  # sample dir first, then outs/
+        for gc in graphclust_dirs
+    ]
+    tar_members = [f"clustering/{gc}/clusters.csv" for gc in graphclust_dirs]
+    searched = []
+
+    # 1. Uncompressed CellRanger tree
+    for relpath in csv_relpaths:
+        csv_path = os.path.join(sample_dir, relpath)
+        searched.append(csv_path)
+        if os.path.exists(csv_path):
+            return pd.read_csv(csv_path)
+
+    # 2. 10x Cloud Analysis tarball
     tar_path = os.path.join(sample_dir, "analysis.tar.gz")
-    target = "clustering/gene_expression_graphclust/clusters.csv"
-    with tarfile.open(tar_path, "r:gz") as tar:
-        member = tar.getmember(target)
-        f = tar.extractfile(member)
-        clusters_df = pd.read_csv(io.BytesIO(f.read()))
-    return clusters_df
+    searched.extend(f"{tar_path}::{m}" for m in tar_members)
+    if os.path.exists(tar_path):
+        with tarfile.open(tar_path, "r:gz") as tar:
+            # Members may or may not carry a "./" prefix
+            names = {n[2:] if n.startswith("./") else n: n
+                     for n in tar.getnames()}
+            for member in tar_members:
+                if member in names:
+                    # extractfile() returns None for a directory or link, so
+                    # fall through to the error below instead of raising a
+                    # bare AttributeError on .read().
+                    f = tar.extractfile(tar.getmember(names[member]))
+                    if f is not None:
+                        return pd.read_csv(io.BytesIO(f.read()))
+
+    raise RuntimeError(
+        f"No CellRanger graph-based clusters found for sample dir "
+        f"{sample_dir}. Step 0b accepts either a local `cellranger count` "
+        "tree or a 10x Cloud Analysis download (analysis.tar.gz). "
+        "Searched:\n  " + "\n  ".join(searched)
+    )
 
 
 def anchor_detection_rates(adata_rna):

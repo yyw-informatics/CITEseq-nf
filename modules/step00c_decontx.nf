@@ -3,11 +3,11 @@
  *
  * Contract:
  *   Input:  CellRanger outputs (read from DATA_ROOT on disk)
- *   Output: decontx/<sample>/filtered_feature_bc_matrix.h5 (x16)
- *           step00c_temp/decontx_<sample>.csv (x16)
+ *   Output: decontx/<sample>/filtered_feature_bc_matrix.h5 (one per library)
+ *           step00c_temp/decontx_<sample>.csv (one per library)
  *   Aggregate: results/phase1_qc/decontx/decontx_summary.csv + barplot
  *
- * Array pattern: 16 per-library tasks -> 1 aggregate.
+ * Array pattern: one task per library -> 1 aggregate.
  * Scripts read from DATA_ROOT and write to PROCESSED_DIR/RESULTS_DIR
  * on the real filesystem.
  *
