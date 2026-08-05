@@ -73,6 +73,37 @@ if (nzchar(.sample_meta_path) && file.exists(.sample_meta_path)) {
 } else {
     SAMPLE_METADATA <- list()
 }
+
+# CITESEQ_N_LIBRARIES (--n_libraries) runs a pilot on the first N libraries.
+# Truncate the metadata itself, not just the Nextflow fan-out, so that every
+# step agrees on which libraries exist. Step 02 (DSB) iterates SAMPLE_DIRS,
+# so without this it would still process the whole cohort.
+.n_libraries <- trimws(Sys.getenv("CITESEQ_N_LIBRARIES", unset = ""))
+if (nzchar(.n_libraries) && length(SAMPLE_METADATA) > 0L) {
+    # Reject before as.integer(), which would silently accept "2.5" or "1e1"
+    # and truncate. Python's int() rejects both, and the two languages must
+    # never end up with a different library list.
+    if (!grepl("^[+-]?[0-9]+$", .n_libraries)) {
+        stop(sprintf("CITESEQ_N_LIBRARIES must be a whole number, got: %s",
+                     .n_libraries))
+    }
+    .n <- suppressWarnings(as.integer(.n_libraries))
+    if (is.na(.n)) {
+        stop(sprintf("CITESEQ_N_LIBRARIES is out of range: %s", .n_libraries))
+    }
+    if (.n < 1L) {
+        stop(sprintf("CITESEQ_N_LIBRARIES must be 1 or greater, got: %d", .n))
+    }
+    if (.n > length(SAMPLE_METADATA)) {
+        stop(sprintf(paste0("CITESEQ_N_LIBRARIES is %d, but the sample ",
+                            "metadata lists only %d. Lower --n_libraries, or ",
+                            "point --sample_metadata_json at a file with more ",
+                            "entries."),
+                     .n, length(SAMPLE_METADATA)))
+    }
+    SAMPLE_METADATA <- SAMPLE_METADATA[seq_len(.n)]
+}
+
 SAMPLE_DIRS <- names(SAMPLE_METADATA)
 ALL_SAMPLES <- names(SAMPLE_METADATA)
 

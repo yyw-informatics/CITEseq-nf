@@ -1,10 +1,74 @@
 # Reference run (2026-04-28)
 
-This page records the one full pipeline run that we know finished cleanly end
-to end. It exists so that a new owner has something to compare against after
-running the pipeline for the first time.
+This page records the full pipeline run that the baseline tables come from.
+It exists so that a new owner has something to compare against after running
+the pipeline for the first time.
 
 Read the warning in the next section before you use any number on this page.
+
+---
+
+## A partial check of the generic code, 2026-08-04
+
+The 2026-04-28 run used the older study-specific code. On **2026-08-04** the
+generic code was given one real-data check. It was **not** a second full run,
+and it did not compare against the 2026-04-28 numbers for most of what it
+checked. Read this section carefully before treating it as a reproduction.
+
+| Item | Value |
+|---|---|
+| Date | 2026-08-04 |
+| Wall clock | 2 h 21 min 33 s, exit 0 |
+| Tasks | 7 ran fresh, 12 came from cache |
+| Libraries computed by the generic code | 2 of 16 |
+| Libraries reused from the 2026-04-28 run | 14 of 16 |
+| GPU steps | both ran, totalVI and scVI on separate queues |
+
+The run was launched with `--n_libraries 2`, but a bug meant only the
+parallel fan-out honoured it. Every step that reads the library list from the
+metadata still used all 16 entries and picked up 14 per-library files left
+over from 2026-04-28. The bug was fixed after this run.
+
+The wall clock is not comparable with the 2 h 43 min above. That one ran 61
+tasks with nothing cached. This one resumed after an earlier failed attempt,
+and most of its time was scVI training.
+
+### What the six checks were
+
+`tests/validate_phase_a.sge` reported 6 PASS, 0 FAIL, 0 SKIP. Their baseline
+is a Phase A output directory outside this repository, dated **2026-04-13**,
+which is earlier than the 2026-04-28 run and is not `tests/baseline/`.
+
+- Four h5ad checks compare structure only: shape, obs column names, layer
+  names, obsm keys. No values.
+- One CSV check compares row and column counts only.
+- One CSV check compares values: `thresholdr_thresholds.csv` was an **exact
+  match** after sorting rows.
+
+### The embedding numbers
+
+These were compared by eye against the committed 2026-04-28 table, and were
+not one of the six checks.
+
+| Metric | 2026-08-04 | 2026-04-28 | Difference |
+|---|---|---|---|
+| batch_silhouette, totalVI | -0.0570 | -0.0519 | 9.9 % |
+| batch_silhouette, scVI | -0.0346 | -0.0367 | 5.6 % |
+| bio_silhouette CRTH2, totalVI | 0.1163 | 0.1219 | 4.6 % |
+| bio_silhouette CRTH2, scVI | 0.0882 | 0.0766 | 15.2 % |
+
+Both runs chose `X_totalVI`. The automatic check in
+`tests/validate_citeseq_nf_e2e.sge` uses a 2 percent tolerance, so these
+differences would not pass it. Read them as the same sign, the same order of
+magnitude, and the same decision, not as a match.
+
+### The panel file was reconstructed
+
+The panel YAML system was added after 2026-04-28, so no panel file existed
+for this data. One was reconstructed on 2026-08-04 from the study's saved
+panel annotations, the ADT feature names read from the CellRanger `.h5`
+files, and the study's own RNA concordance map. The exact threshold match
+above is the best evidence that the reconstruction is correct.
 
 ---
 
@@ -57,12 +121,10 @@ disappeared, that is a real problem worth investigating.
 | Entry point | default (full pipeline: Phase A QC, then Phase B embedding) |
 | Cached tasks | none. All 61 tasks actually ran, so the wall clock is a real end-to-end time |
 
-### Design of the 16 libraries
+### Shape of the 16 libraries
 
-Two age groups (`young`, `aged`) x two timepoints (`d0`, `d7`). Four donors
-contributed one library per timepoint (8 libraries). Two donors contributed
-two technical replicates per timepoint (8 libraries). Sample labels look like
-`donor_01_aged_d0_rep1_sample_11_1`.
+Six donors, two groups, two timepoints, with technical replicates for some
+donors. Labels in the baseline tables look like `donor_01_aged_d0_rep1`.
 
 ### Cluster setup
 
@@ -298,11 +360,12 @@ tests/baseline/
 
 See `tests/baseline/README.md` for a one-line description of each file.
 
-Donor identifiers in those files are anonymised. Real donor numbers were
-replaced with `donor_01` through `donor_06`. Age group, timepoint, replicate
-number, sample number, and every numeric value are unchanged. The mapping back
-to real donor IDs is not stored in this repository and is not recoverable
-from it.
+Donor labels in those files are pseudonyms, not anonymous. Real donor numbers
+were replaced with `donor_01` through `donor_06`. Age group, timepoint,
+replicate number and every numeric value are unchanged. The original sample
+numbers were removed, because they would let anyone holding the study sample
+sheet reverse the pseudonyms. The mapping is not stored in this repository,
+but someone with access to the study records could rebuild it.
 
 Marker names (CD7, CD16, CD117, CRTH2) are real study markers. They are not
 personal data and were kept as-is.

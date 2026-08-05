@@ -356,11 +356,25 @@ def _generate_summary(parallel=False):
         a concurrent sequential run.
     """
     suffix = "_parallel" if parallel else ""
-    csvs = sorted(
-        [os.path.join(SOUPX_RESULTS_DIR, f)
-         for f in os.listdir(SOUPX_RESULTS_DIR)
-         if f.startswith("soupx_diag_") and f.endswith(".csv")]
-    )
+    # Take the library list from the config, not from a directory listing.
+    # SOUPX_RESULTS_DIR is a published output directory, so a listing would
+    # also pick up files from an earlier run over a different set of
+    # libraries, and those stale rows would survive into the summary.
+    sample_order = list(SAMPLE_METADATA.keys())
+    csvs = []
+    missing = []
+    for sample in sample_order:
+        path = os.path.join(SOUPX_RESULTS_DIR, f"soupx_diag_{sample}.csv")
+        if os.path.exists(path):
+            csvs.append(path)
+        else:
+            missing.append(path)
+    if missing:
+        print("ERROR: missing per-library diagnostics CSVs:")
+        for path in missing:
+            print(f"  {path}")
+        print("Run the per-library SoupX tasks before aggregating.")
+        sys.exit(1)
     if not csvs:
         print("ERROR: No per-library diagnostics CSVs found.")
         sys.exit(1)
@@ -368,7 +382,6 @@ def _generate_summary(parallel=False):
     summary_df = pd.concat([pd.read_csv(c) for c in csvs], ignore_index=True)
 
     # Ensure consistent sample ordering (match SAMPLE_METADATA key order)
-    sample_order = list(SAMPLE_METADATA.keys())
     summary_df["_sort"] = summary_df["sample"].map(
         {s: i for i, s in enumerate(sample_order)}
     )

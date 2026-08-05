@@ -109,7 +109,7 @@ GPU host. Then they train at the same time instead of waiting for each other.
 | `SAMPLE_METADATA_JSON` | not set | JSON file mapping library id to sample metadata. Passed as `--sample_metadata_json`. |
 | `FORCED_HVGS_FILE` | not set | Text file, one gene per line. Those genes are always kept as highly variable genes. Passed as `--forced_hvgs_file`. |
 | `BIO_SEP_MARKER` | not set | The marker used to score biological separation. Pick a protein from your own panel that you expect to split your cells into two groups. Passed as `--biological_separation_marker`. There is no default marker, and none is assumed. If you leave it unset, the biological silhouette comparison in `validate_citeseq_nf_e2e.sge` is skipped. |
-| `N_LIBRARIES` | not set | Number of libraries, if it cannot be derived from the metadata. Passed as `--n_libraries`. |
+| `N_LIBRARIES` | not set | Run on only the first N libraries. Passed as `--n_libraries`. Every step honours it, so a pilot really does process N libraries and not the whole cohort. Set `SAMPLE_METADATA_JSON` as well: `N_LIBRARIES` selects the first N entries of that file. |
 | `NEXTFLOW_MODULE` | `nextflow/25.10.4` | Module name to load if `nextflow` is not already on your `PATH`. Change it to whatever your cluster calls it. |
 | `SCRATCH` | `${TMPDIR:-/tmp}` | Temporary directory for intermediate files. |
 | `CITESEQ_NF` | derived | Path to this repository. The scripts work it out from their own location. Set it only if a script says it cannot find `main.nf`. |
@@ -270,7 +270,13 @@ two only read files that already exist. So the order is:
 1. **`validate_phase_a.sge`, with `N_LIBRARIES` set to 2 or 3.** A small pilot
    on real data. This script runs the pipeline itself, so it creates the
    Phase A files it then checks. Setup problems appear here first, and on two
-   or three libraries they appear in minutes. On this first pass there is no
+   or three libraries they appear in minutes.
+
+   > **Not yet tested on real data.** `N_LIBRARIES` used to limit only the
+   > parallel fan-out, so a pilot quietly processed the whole cohort. That was
+   > fixed on 2026-08-05, after the last real run. The fix works in tests, but
+   > nobody has run it against real data yet. If your pilot processes more
+   > libraries than you asked for, that is the first thing to check. On this first pass there is no
    `phase_a_baseline/` on disk yet, so the compare stage has nothing to compare
    against. Read this pass as a check that Phase A runs at all. Note that the
    script also runs Phase B, so you need both GPU queue names, and the job

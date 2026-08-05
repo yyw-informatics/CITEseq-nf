@@ -17,3 +17,7 @@ __pycache__/
 .Rdata
 .RData
 .Ruserdata
+
+.claude/
+sample_metadata.json
+*_metadata.json

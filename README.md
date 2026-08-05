@@ -370,7 +370,7 @@ ${CITESEQ_NF}/run.sh run \
 | Input | Required? | How to set | Notes |
 |---|---|---|---|
 | CellRanger data root | **yes** | passed via `--data_root` | There is **no default**. `main.nf` stops at launch if you omit it. The directory holds one subdirectory per library. Each `<library_id>/` holds that library's `raw_feature_bc_matrix.h5` and `filtered_feature_bc_matrix.h5`, plus the graph-based clusters in one of the two layouts below. |
-| `sample_metadata.json` | optional, but see note | passed via `--sample_metadata_json` | JSON dict: `library_id` → `{donor, age, age_group, timepoint, replicate}`. Unknown keys ignored. The pipeline also counts its keys to learn how many libraries to fan out over. If you skip it, pass `--n_libraries N` instead. |
+| `sample_metadata.json` | optional, but see note | passed via `--sample_metadata_json` | JSON dict: `library_id` → `{donor, age, age_group, timepoint, replicate}`. Unknown keys ignored. The pipeline also counts its keys to learn how many libraries to fan out over. The array steps need it. `--n_libraries` selects the first N of its entries; it does not replace the file. |
 | `forced_hvgs.txt` | optional | passed via `--forced_hvgs_file` | One gene symbol per line. `#` comments and blank lines are ignored. These genes always enter the HVG set, even when the `seurat_v3` ranking does not pick them. `seurat_v3` is the scanpy method that picks variable genes. |
 
 ### Two supported data layouts
@@ -464,7 +464,7 @@ nothing, the default in `config.py` and `config.R` stays active.
 | `--rscript` | `${conda_env}/bin/Rscript` | Override the Rscript interpreter used by R step modules. |
 | `--forced_hvgs_file` | *(empty)* | Text file with one gene symbol per line. Blank lines and `#`-prefixed comments ignored. Empty means the `seurat_v3` auto-selection alone picks the HVGs. |
 | `--sample_metadata_json` | *(empty)* | JSON dict mapping `library_id` → metadata object (see Inputs). Phase A also counts its keys to set the number of libraries. |
-| `--n_libraries` | *(counted from `--sample_metadata_json`)* | How many libraries Phase A fans out over. It must be a whole number, 1 or greater. Use it for a pilot run on a subset, or when you have no metadata JSON. Nothing is hardcoded: without either this param or `--sample_metadata_json`, the default and `from_cellranger` entry points stop with an error. Entry points that skip Phase A do not need it. |
+| `--n_libraries` | *(counted from `--sample_metadata_json`)* | Run on only the first N libraries. It must be a whole number, 1 or greater, and no larger than the number of entries in your metadata file. Use it for a pilot run on a subset. It needs `--sample_metadata_json` as well, because it selects the first N entries of that file. Every step honours it, not only the parallel fan-out: the config layer truncates the library list itself, so step 02 (DSB) and the aggregation steps see the same N. Without either this param or `--sample_metadata_json`, the default and `from_cellranger` entry points stop with an error. Entry points that skip Phase A do not need it. |
 | `--branch` | `decontx` | Decontamination branch to use downstream (`decontx` or `soupx`). Nothing is auto-detected. When you pass nothing, `main.nf` and `subworkflows/phase_a_qc.nf` both fall back to the fixed value `decontx`. |
 | `--run_both_branches` | `false` | Run both SoupX and DecontX (for comparison); default runs only the selected branch. |
 | `--qc_mad_n_mads` | *(config default)* | QC MAD threshold for per-cell metrics. Exported as `CITESEQ_QC_MAD_N_MADS`. |
@@ -659,11 +659,13 @@ than the rest" in Handover notes.
 
 Two things to know before you use them.
 
-**Donor identifiers are anonymized.** The real donor numbers were replaced
-with `donor_01` to `donor_06`. Age group, timepoint, replicate, sample
-number, and every numeric value are unchanged. The mapping back to the real
-donor IDs is not stored in this repository and cannot be recovered from it.
-No file holds a cell barcode, a file path, a host name, or a user name.
+**Donor labels are pseudonyms, not anonymous.** The real donor numbers were
+replaced with `donor_01` to `donor_06`. Age group, timepoint, replicate and
+every numeric value are unchanged. The original sample numbers were removed,
+because they would let anyone holding the study sample sheet reverse the
+pseudonyms. The mapping is not stored here, but someone with access to the
+study records could rebuild it. No file holds a cell barcode, a file path, a
+host name, or a user name.
 
 **A new run will not reproduce these numbers exactly.** totalVI and scVI are
 stochastic: they start from random weights, shuffle the data at random, and
@@ -699,26 +701,105 @@ stale input file from an earlier run, so two of the nine baseline tables do
 not describe the 2026-04-28 data. See "Two baseline tables are older than the
 rest" further down.
 
+**The generic code was given one real-data check on 2026-08-04. It was not a
+full run.** Read what follows before you trust it.
+
+The run was started with `--n_libraries 2` against the 16-library metadata
+file. A bug, fixed after the run, meant only the parallel fan-out honoured
+that number. Every step that reads the library list from the metadata still
+worked on all 16 libraries, and found 14 per-library files left over from the
+2026-04-28 run on disk. So the run computed 2 libraries with the new code and
+reused 14 from the old code.
+
+The run also used `-resume` after an earlier attempt that evening failed in
+the scVI step. Nextflow ran 7 tasks and took 12 from cache. The April run,
+for comparison, ran 61 tasks with nothing cached.
+
+| Item | Value |
+|---|---|
+| Wall clock | 2 h 21 min 33 s, exit 0. Not an end-to-end time: it is a resumed run and most of it is scVI training. |
+| Ran fresh | DSB, ThresholdR, KDE, gating fitness, totalVI, scVI, final embedding |
+| Came from cache | DecontX, QC, doublet calling, CLR, RNA normalization |
+| Libraries computed by this code | 2 of 16 |
+
+The check that followed was `tests/validate_phase_a.sge`. It reported 6 PASS,
+0 FAIL, 0 SKIP. Be exact about what those six are:
+
+- Four (`adata_qc.h5ad`, `adata_qc_clr.h5ad`, `adata_normalized.h5ad`,
+  `adata_qc_hvg.h5ad`) compare structure only: shape, obs column names, layer
+  names and obsm keys. No values are compared.
+- One (`dsb_normalized_adt.csv`) compares the row and column count only.
+- One (`thresholdr_thresholds.csv`) compares values, and it was an exact
+  match after sorting rows.
+
+The baseline for all six is a Phase A output directory outside this
+repository whose files are dated **2026-04-13**. That is earlier than the
+2026-04-28 reference run, and it is not the committed baseline in
+`tests/baseline/`.
+
+Separately, `embedding_comparison.csv` was compared by eye against the
+committed 2026-04-28 table. Both runs chose `X_totalVI`. The silhouette
+scores differ by 4.6, 5.6, 9.9 and 15.2 percent. The automatic check in
+`tests/validate_citeseq_nf_e2e.sge` uses a 2 percent tolerance, so these
+numbers would not pass it. Read them as "same sign, same order of magnitude,
+same decision", not as a match.
+
+**What this proves.** The generic code runs to the end on a real cluster with
+real data. Panel loading from YAML, the `CITESEQ_*` variable contract and
+path resolution outside the original study repository all work. ThresholdR
+gating with the reconstructed panel reproduced the earlier thresholds
+exactly, which is good evidence the panel file was reconstructed correctly.
+
+**What this does not prove.** It does not show that the generic code
+reproduces the 2026-04-28 result on all 16 libraries. Only 2 libraries were
+computed by this code. The other 14 came from the old study-specific code,
+and the four structure checks passed partly because of that: the file shapes
+matched the old baseline because most of the old data was still inside them.
+
 ### What is not proven
 
-**That run used the older, study-specific code. It did not use the code in
-this repository.** The code here is the generic version. The hardcoded study
-paths, the fixed library count of 16, and the study-specific defaults were
-all removed.
-
-The generic code has passed two checks:
+The generic code has also passed two cheaper checks:
 
 - a Nextflow dry run on all seven entry points (default, `from_cellranger`,
   `from_qc`, `from_clr`, `clr_only`, `from_hvg`, `from_totalvi_scvi`);
 - a syntax check of every Python and R step script. They all compile.
 
-Neither check touches real data. A dry run only proves that Nextflow can
-build the workflow graph and that the parameters resolve.
+What has **not** been tested:
 
-**The generic code has never been run end to end on real data.** The first
-real run is still ahead of you. Expect it to stop once or twice on small
-things such as a path, a queue name, or a missing R package. That is a setup
-problem, not a sign that the method is wrong.
+- **The code as it stands today has never been run on real data.** This is
+  the biggest gap. The `--n_libraries` fix in `scripts/config.py`,
+  `scripts/config.R` and `nextflow.config` was written after the 2026-08-04
+  run, so no real-data run has used it.
+- **No run has ever computed all 16 libraries with the generic code.** The
+  most it has done is 2.
+- **The Phase A comparison baseline is not in this repository.** It lives
+  outside the repo and holds about 32 GB of h5ad files. You cannot reproduce
+  the six-check result without building your own baseline first.
+- **Only the default entry point has touched real data.** The other six were
+  exercised with `-preview` only.
+- **Only the DecontX branch has ever run.** SoupX and `--run_both_branches`
+  have never run on real data.
+- **A run on a different cohort.** Every run so far used the same 16-library
+  data set. A different panel, a different library count, or the standard
+  local `cellranger count` layout have never been exercised on real data. The
+  CellRanger layout resolver was tested against fixtures and against the real
+  10x Cloud archive, but not against a real local CellRanger tree.
+- **A run on a different cluster.** The SGE queue names, the resource
+  requests in `conf/resources.config` and the GPU labels have only ever been
+  used on one cluster.
+- **The gating fitness table and the KDE comparison table** were regenerated
+  on 2026-08-04 but were never compared against anything.
+
+One more thing to know about the panel: the panel YAML for that study was not
+preserved. It was reconstructed on 2026-08-04 from the study's saved panel
+annotations, the ADT feature names read from the CellRanger `.h5` files, and
+the study's own RNA concordance map. The exact ThresholdR threshold match is
+the best evidence that the reconstruction is right, but it was a
+reconstruction.
+
+Expect your first run on new data to stop once or twice on small things such
+as a path, a queue name, or a missing R package. That is a setup problem, not
+a sign that the method is wrong.
 
 ### The environment has not been built from scratch
 

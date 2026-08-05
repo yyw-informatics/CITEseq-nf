@@ -147,6 +147,33 @@ if _sample_meta_path and os.path.exists(_sample_meta_path):
 else:
     SAMPLE_METADATA = {}
 
+# CITESEQ_N_LIBRARIES (--n_libraries) runs a pilot on the first N libraries.
+# Truncate the metadata itself, not just the Nextflow fan-out, so that every
+# step agrees on which libraries exist. Steps that iterate SAMPLE_DIRS (DSB)
+# or SAMPLE_METADATA (the QC and doublet aggregates) would otherwise still
+# expect all of them and pull in stale files from an earlier full run.
+_n_libraries = os.environ.get("CITESEQ_N_LIBRARIES", "").strip()
+if _n_libraries and SAMPLE_METADATA:
+    try:
+        _n = int(_n_libraries)
+    except ValueError:
+        raise RuntimeError(
+            f"CITESEQ_N_LIBRARIES must be a whole number, got: {_n_libraries!r}"
+        )
+    if _n < 1:
+        raise RuntimeError(
+            f"CITESEQ_N_LIBRARIES must be 1 or greater, got: {_n}"
+        )
+    if _n > len(SAMPLE_METADATA):
+        raise RuntimeError(
+            f"CITESEQ_N_LIBRARIES is {_n}, but the sample metadata lists only "
+            f"{len(SAMPLE_METADATA)} librar"
+            f"{'y' if len(SAMPLE_METADATA) == 1 else 'ies'}. "
+            "Lower --n_libraries, or point --sample_metadata_json at a file "
+            "with more entries."
+        )
+    SAMPLE_METADATA = dict(list(SAMPLE_METADATA.items())[:_n])
+
 ALL_SAMPLES = list(SAMPLE_METADATA.keys())
 SAMPLE_DIRS = list(SAMPLE_METADATA.keys())
 

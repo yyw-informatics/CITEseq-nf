@@ -9,11 +9,15 @@ Full context, software versions, and the key numbers are in
 
 ## Read this first
 
-**Donor identifiers are anonymised.** The real donor numbers were replaced
-with `donor_01` through `donor_06`. Age group (`young` / `aged`), timepoint
-(`d0` / `d7`), replicate (`rep1` / `rep2`), sample number, and **every numeric
-value** are unchanged. The mapping back to real donor IDs is not stored in this
-repository and cannot be recovered from it.
+**Donor labels are pseudonyms, not anonymous.** The real donor numbers were
+replaced with `donor_01` through `donor_06`. Age group (`young` / `aged`),
+timepoint (`d0` / `d7`), replicate (`rep1` / `rep2`) and **every numeric
+value** are unchanged. The original sample numbers were removed, because they
+would let anyone holding the study sample sheet reverse the pseudonyms.
+
+The mapping back to the real donor numbers is not stored in this repository.
+Someone with access to the study records could still rebuild it. Treat these
+labels as pseudonyms and not as anonymous data.
 
 Marker names (CD7, CD16, CD117, CRTH2) are real study markers. They are not
 personal data, so they were left as-is.
