@@ -18,6 +18,16 @@ __pycache__/
 .RData
 .Ruserdata
 
-.claude/
+.claude
+.codex
+.cursor
+.aider*
+.continue
+.windsurf
+.github-copilot
+.gemini
+.vscode
+.idea
+
 sample_metadata.json
 *_metadata.json
