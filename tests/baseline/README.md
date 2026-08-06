@@ -19,7 +19,7 @@ The mapping back to the real donor numbers is not stored in this repository.
 Someone with access to the study records could still rebuild it. Treat these
 labels as pseudonyms and not as anonymous data.
 
-Marker names (CD7, CD16, CD117, CRTH2) are real study markers. They are not
+Marker names (MARKER_A, MARKER_D, MARKER_B, MARKER_C) are real study markers. They are not
 personal data, so they were left as-is.
 
 **These are not a bit-exact target.** The code revision that produced them was

@@ -168,7 +168,7 @@ workflow PHASE_A_QC {
     // both step05b and step05c. The thresholds dependency transitively
     // gates these on the full norm block.
 
-    // step05b needs CLR-normalized data (ADT_CD7 etc. in .obs).
+    // step05b needs CLR-normalized data (ADT_<marker> columns in .obs).
     // step03_clr.out.clr is adata_qc_clr.h5ad; stage it as adata_qc.h5ad
     // so the script reads it via ADATA_QC = $PWD/adata_qc.h5ad.
     step05b_kde(

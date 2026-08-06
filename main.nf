@@ -138,7 +138,7 @@ workflow from_qc {
     )
 
     // Parallel diagnostics (steps 05b, 05c)
-    // Both need CLR-normalized data (ADT_CD7 etc. in .obs)
+    // Both need CLR-normalized data (ADT_<marker> columns in .obs)
     step05b_kde(
         step03_clr.out.clr,
         step05a_thresholdr.out.thresholds,

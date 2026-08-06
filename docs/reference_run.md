@@ -54,8 +54,8 @@ not one of the six checks.
 |---|---|---|---|
 | batch_silhouette, totalVI | -0.0570 | -0.0519 | 9.9 % |
 | batch_silhouette, scVI | -0.0346 | -0.0367 | 5.6 % |
-| bio_silhouette CRTH2, totalVI | 0.1163 | 0.1219 | 4.6 % |
-| bio_silhouette CRTH2, scVI | 0.0882 | 0.0766 | 15.2 % |
+| bio_silhouette MARKER_C, totalVI | 0.1163 | 0.1219 | 4.6 % |
+| bio_silhouette MARKER_C, scVI | 0.0882 | 0.0766 | 15.2 % |
 
 Both runs chose `X_totalVI`. The automatic check in
 `tests/validate_citeseq_nf_e2e.sge` uses a 2 percent tolerance, so these
@@ -287,12 +287,12 @@ Fitness verdicts (`thresholdr_fitness_metrics.csv`):
 
 | Marker | Components chosen | Stain quality score | Verdict |
 |---|---|---|---|
-| CD7 | 2 | 3.73 | PASS |
-| CRTH2 | 2 | 2.86 | FAIL |
-| CD117 | 2 | 1.71 | FAIL |
-| CD16 | 2 | 1.03 | FAIL |
+| MARKER_A | 2 | 3.73 | PASS |
+| MARKER_C | 2 | 2.86 | FAIL |
+| MARKER_B | 2 | 1.71 | FAIL |
+| MARKER_D | 2 | 1.03 | FAIL |
 
-Only CD7 passed. That is a real property of this antibody panel, not a
+Only MARKER_A passed. That is a real property of this antibody panel, not a
 pipeline failure. The fitness step is doing its job: it is telling you that
 three of four stains are weak or overlapping.
 
@@ -301,12 +301,12 @@ two threshold methods disagree:
 
 | Marker | KDE positive | ThresholdR positive | Cells reclassified |
 |---|---|---|---|
-| CD7 | 33.5 % | 34.2 % | 1,072 |
-| CD117 | 5.4 % | 9.1 % | 5,916 |
-| CD16 | 7.0 % | 9.6 % | 4,161 |
-| CRTH2 | 0.01 % | 2.5 % | 4,044 |
+| MARKER_A | 33.5 % | 34.2 % | 1,072 |
+| MARKER_B | 5.4 % | 9.1 % | 5,916 |
+| MARKER_D | 7.0 % | 9.6 % | 4,161 |
+| MARKER_C | 0.01 % | 2.5 % | 4,044 |
 
-CRTH2 is the extreme case: the KDE valley method finds almost nothing (21
+MARKER_C is the extreme case: the KDE valley method finds almost nothing (21
 cells) while ThresholdR finds 4,065. When you see this pattern, trust neither
 threshold blindly. This is exactly why the panel config supports an
 `fgprob_override` list that switches a marker to the totalVI foreground
@@ -330,12 +330,12 @@ final ELBO will differ, and the early-stopping epoch will differ too.
 
 ### Embedding comparison (step 08)
 
-The biological separation marker was CRTH2.
+The biological separation marker was MARKER_C.
 
 | Metric | totalVI | scVI |
 |---|---|---|
 | Batch silhouette (lower is better mixing) | -0.0519 | -0.0367 |
-| Biological silhouette on CRTH2 (higher is better) | 0.1219 | 0.0766 |
+| Biological silhouette on MARKER_C (higher is better) | 0.1219 | 0.0766 |
 | Decision | `X_totalVI` | |
 
 totalVI won on both counts: better batch mixing and clearly better separation
@@ -367,7 +367,7 @@ numbers were removed, because they would let anyone holding the study sample
 sheet reverse the pseudonyms. The mapping is not stored in this repository,
 but someone with access to the study records could rebuild it.
 
-Marker names (CD7, CD16, CD117, CRTH2) are real study markers. They are not
+Marker names (MARKER_A, MARKER_D, MARKER_B, MARKER_C) are real study markers. They are not
 personal data and were kept as-is.
 
 The large outputs from this run (the `.h5ad` files, the trained model
