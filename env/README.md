@@ -181,3 +181,101 @@ micromamba create --dry-run -n citeseq-nf-check -f env/environment.yml
 
 The conda part must solve cleanly. The pip part is skipped in a dry run, and
 the warning it prints about a missing prefix is expected.
+
+---
+
+## What is in the environment
+
+Python is 3.10.19. Every version below is quoted from `env/environment.yml`.
+
+Imported by name in `scripts/config.py` or `scripts/python/*.py`:
+
+| Package | Version | Where it is used |
+|---|---|---|
+| `scanpy` | 1.11.5 | every step script (`import scanpy as sc`) |
+| `anndata` | 0.11.4 | step 08 |
+| `numpy` | 2.2.6 | most step scripts |
+| `pandas` | 2.3.3 | most step scripts |
+| `scipy` | 1.15.2 | sparse matrices, `gaussian_kde` (step 05b, 05c), `find_peaks` (step 05b) |
+| `scikit-learn` | 1.7.2 | `GaussianMixture` (step 05c), `silhouette_score` (step 08) |
+| `matplotlib-base` | 3.10.8 | all figures |
+| `h5py` | 3.15.1 | step 00b reads `.h5` matrices directly |
+| `pyyaml` | 6.0.3 | `scripts/config.py` reads the panel YAML |
+| `scvi-tools` | 1.3.3 | step 06 totalVI, step 07 scVI (`import scvi`) |
+| `soupx-python` | 0.3.0 | step 00b (`import soupx`). This is the **Python** SoupX port, not the R `SoupX` package. |
+
+Never imported by name, but a step fails without them:
+
+| Package | Version | Why it is needed |
+|---|---|---|
+| `torch` | 2.5.1 | the deep-learning backend `scvi-tools` runs on. Pinned below 2.6 so the Lightning version `scvi-tools` pulls in keeps working. |
+| `mudata` | 0.3.3 | data container `scvi-tools` uses |
+| `scikit-misc` | 0.5.2 | needed by `sc.pp.highly_variable_genes(flavor="seurat_v3")` in step 04 |
+| `scikit-image` | 0.25.2 | threshold search inside `sc.pp.scrublet` in step 01 |
+| `leidenalg` | 0.11.0 | `sc.tl.leiden` in steps 06 and 07 |
+| `python-igraph` | 1.0.0 | graph backend for `leidenalg` |
+| `umap-learn` | 0.5.11 | `sc.tl.umap` in steps 06, 07 and 08 |
+| `pynndescent` | 0.5.13 | nearest-neighbour backend for `umap-learn` |
+| `statsmodels` | 0.14.6 | required by `soupx-python` |
+| `numba` | 0.63.1 | just-in-time compiler that scanpy and `umap-learn` use |
+| `seaborn-base` | 0.13.2 | used by some scanpy plotting calls |
+
+`env/environment.yml` pins a few more small helpers that scanpy and `h5py`
+need: `natsort` 8.4.0, `tqdm` 4.67.3, `session-info2` 0.3 and `hdf5` 1.14.6.
+
+`rpy2` 3.6.6 is also pinned. No step script imports it today. It stays because
+it was part of the validated environment.
+
+### R packages
+
+R is 4.4.3, with Bioconductor release 3.20. Versions come from
+`env/environment.yml` unless the table says otherwise.
+
+| Package | Version | Loaded by |
+|---|---|---|
+| `decontX` | 1.4.1 (from `env/r_extra.R`) | step 00c, ambient-RNA removal |
+| `rhdf5` | 2.50.2 (from `env/r_extra.R`) | steps 00c and 01b, reads 10x `.h5` matrices |
+| `scDblFinder` | 1.23.4 | step 01b, doublet calling |
+| `SingleCellExperiment` | 1.28.0 | step 01b container |
+| `dsb` | 2.0.1 | step 02, ADT denoising |
+| `ThresholdR` | 0.1.0 (vendored, see below) | step 05a, per-marker gating |
+| `ggplot2` | 4.0.2 | step 05a fit plots |
+| `Matrix` | 1.7-4 | steps 00c, 01b, 02 |
+| `Seurat` | 5.4.0 | `Seurat::Read10X_h5` in steps 00c and 02 |
+| `jsonlite` | 2.0.0 | `scripts/config.R` |
+| `yaml` | 2.3.12 | `scripts/config.R` |
+
+These packages are installed as dependencies. No script loads them.
+
+| Package | Version | Needed by |
+|---|---|---|
+| `celda` | 1.22.1 (from `env/r_extra.R`) | `decontX` |
+| `mclust` | 6.1.2 | called from inside `ThresholdR` |
+| `mixtools` | 2.0.0.1 | called from inside `ThresholdR` |
+| `foreach` | 1.5.2 | called from inside `ThresholdR` |
+| `limma` | 3.62.1 | `dsb` |
+| `magrittr` | 2.0.4 | `dsb` |
+| `remotes` | 2.5.0 | `env/r_extra.R` |
+
+Two notes on the R side:
+
+- **`ThresholdR` is on no conda channel.** It lives on GitHub only.
+  `env/r_extra.R` installs it. `env/vendor/ThresholdR_0.1.0.tar.gz` is a
+  rebuild of the build the reference run of 2026-04-28 used, not the original
+  source. No original source tarball was archived, so the package was rebuilt
+  by deparsing the installed package database. The executed code was checked
+  function by function and is identical. The source comments and the code
+  formatting are not the original ones. Read `env/vendor/README.md` before you
+  choose between the two sources. This is the most fragile dependency in the
+  whole stack.
+- **`env/r_extra.R` reinstalls five R packages** that `env/environment.yml`
+  does not supply at the recorded version. This is expected.
+
+  | Package | `env/environment.yml` pins | Recorded version | Gap |
+  |---|---|---|---|
+  | `rhdf5` | 2.50.0 | 2.50.2 | two patch releases |
+  | `celda` | 1.22.0 | 1.22.1 | one patch release |
+  | `decontX` | 1.4.0 | 1.4.1 | one patch release |
+  | `Rhdf5lib` | not pinned at all | 1.28.0 | conda pin missing |
+  | `rhdf5filters` | not pinned at all | 1.18.1 | conda pin missing |
+
